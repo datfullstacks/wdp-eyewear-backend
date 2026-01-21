@@ -14,7 +14,9 @@ const corsOptions = {
       process.env.MOBILE_APP_URL
     ].filter(Boolean); // Remove undefined values
 
-    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+    console.log('CORS check - request origin:', origin);
+    // Allow if origin matches exactly or starts with any allowed origin
+    if (!origin || allowedOrigins.some(allowed => origin === allowed || origin.startsWith(allowed))) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
