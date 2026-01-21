@@ -4,7 +4,7 @@ const corsOptions = {
     // Allow requests with no origin (like mobile apps, Postman)
     if (!origin) return callback(null, true);
 
-    const allowedOrigins = [
+    const allowedOrigins = (process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [
       process.env.FRONTEND_URL || 'http://localhost:3000',
       process.env.FRONTEND_URL_ALT || 'http://localhost:3001',
       process.env.VITE_DEV_URL || 'http://localhost:5173',
@@ -12,7 +12,7 @@ const corsOptions = {
       process.env.REACT_NATIVE_NETWORK_URL,
       process.env.PRODUCTION_FRONTEND_URL,
       process.env.MOBILE_APP_URL
-    ].filter(Boolean); // Remove undefined values
+    ]).filter(Boolean); // Remove undefined values
 
     if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
       callback(null, true);
