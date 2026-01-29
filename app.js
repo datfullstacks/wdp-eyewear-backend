@@ -15,6 +15,7 @@ const AppError = require('./errors/AppError');
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 var authRouter = require('./routes/auth');
+var productsRouter = require('./routes/products');
 
 var app = express();
 
@@ -47,6 +48,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs, {
 app.use('/', indexRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/products', productsRouter);
 
 // Handle undefined routes
 app.all('*', (req, res, next) => {

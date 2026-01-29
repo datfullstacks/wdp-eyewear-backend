@@ -1,4 +1,4 @@
-const { body, validationResult } = require('express-validator');
+const { body, validationResult, param } = require('express-validator');
 
 // Validation middleware
 exports.validate = (req, res, next) => {
@@ -8,6 +8,11 @@ exports.validate = (req, res, next) => {
   }
   next();
 };
+
+// Validate MongoDB ID
+exports.validateId = [
+    param('id').isMongoId().withMessage('Invalid ID format')
+];
 
 // Register validation rules
 exports.registerRules = [
