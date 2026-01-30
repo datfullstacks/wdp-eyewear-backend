@@ -49,6 +49,13 @@ const PRODUCT_TYPES = {
   ACCESSORIES: 'accessories'
 };
 
+// Product_status
+const PRODUCT_STATUS = {
+  ACTIVE: 'active',
+  INACTIVE: 'inactive',
+  OUT_OF_STOCK: 'out_of_stock'
+};
+
 // HTTP Status codes
 const HTTP_STATUS = {
   // 2xx Success
@@ -83,6 +90,8 @@ const PAGINATION = {
   MAX_LIMIT: 100
 };
 
+
+
 module.exports = {
   USER_ROLES,
   ORDER_STATUS,
@@ -90,6 +99,7 @@ module.exports = {
   PAYMENT_STATUS,
   PAYMENT_METHODS,
   PRODUCT_TYPES,
+  PRODUCT_STATUS,
   HTTP_STATUS,
   PAGINATION
 };
