@@ -1,5 +1,5 @@
 const { body, query } = require('express-validator');
-const { PRODUCT_TYPES } = require('../config/constants');
+const { PRODUCT_TYPES } = require('../constants');
 
 exports.createProductRules = [
     body('name').notEmpty().withMessage('Product name is required'),
