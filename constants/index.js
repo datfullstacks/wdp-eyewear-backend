@@ -20,9 +20,9 @@ const ORDER_STATUS = {
 
 // Order types
 const ORDER_TYPES = {
-  READY_STOCK: 'ready_stock',      // Kính có sẵn
-  PRE_ORDER: 'pre_order',          // Đặt trước
-  PRESCRIPTION: 'prescription'      // Làm kính theo đơn
+  READY_STOCK: 'ready_stock',      // K?nh c? s?n
+  PRE_ORDER: 'pre_order',          // ??t tr??c
+  PRESCRIPTION: 'prescription'      // L?m k?nh theo ??n
 };
 
 // Payment status
@@ -43,14 +43,20 @@ const PAYMENT_METHODS = {
 
 // Product types
 const PRODUCT_TYPES = {
-  FRAME: 'frame',      // Gọng kính
-  LENS: 'lens',        // Tròng kính
-  SUNGLASSES: 'sunglasses',
-  ACCESSORIES: 'accessories'
+  FRAME: 'frame',                // G?ng k?nh
+  LENS: 'lens',                  // Tr?ng k?nh
+  SUNGLASSES: 'sunglasses',      // K?nh m?t
+  CONTACT_LENS: 'contact_lens',  // K?nh ?p tr?ng
+  ACCESSORY: 'accessory',        // Ph? ki?n
+  SERVICE: 'service',            // D?ch v?
+  BUNDLE: 'bundle',              // Combo
+  GIFT_CARD: 'gift_card',        // Th? qu?
+  OTHER: 'other'                 // Kh?c
 };
 
-// Product_status
+// Product status
 const PRODUCT_STATUS = {
+  DRAFT: 'draft',
   ACTIVE: 'active',
   INACTIVE: 'inactive',
   OUT_OF_STOCK: 'out_of_stock'
@@ -90,7 +96,17 @@ const PAGINATION = {
   MAX_LIMIT: 100
 };
 
-
+// Accessory categories (for validation)
+const ACCESSORY_CATEGORIES = [
+  'replacement_part',
+  'care_solution',
+  'case',
+  'cleaning_kit',
+  'cloth',
+  'strap',
+  'solution',
+  'kit'
+];
 
 module.exports = {
   USER_ROLES,
@@ -101,5 +117,6 @@ module.exports = {
   PRODUCT_TYPES,
   PRODUCT_STATUS,
   HTTP_STATUS,
-  PAGINATION
+  PAGINATION,
+  ACCESSORY_CATEGORIES
 };
