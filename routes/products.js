@@ -99,6 +99,36 @@ router.use(protect);
  *     responses:
  *       201:
  *         description: Product created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Product'
+ *             example:
+ *               id: "601c3c8b8f1b2c001c8b4567"
+ *               name: "Kính Rayban Aviator"
+ *               slug: "kinh-rayban-aviator"
+ *               description: "Kính mát Rayban kiểu phi công, chống UV."
+ *               type: "sunglasses"
+ *               brand: "Rayban"
+ *               basePrice: 2500000
+ *               specs:
+ *                 material: "Kim loại"
+ *                 shape: "Aviator"
+ *                 gender: "unisex"
+ *                 lensType: "Chống UV"
+ *               variants:
+ *                 - sku: "RB-AVT-BLK-M"
+ *                   color: "Đen"
+ *                   size: "M"
+ *                   price: 2500000
+ *                   stock: 10
+ *                   images:
+ *                     - "https://cdn.wdp-eyewear.com/products/rb-avt-blk-m.jpg"
+ *               status: "active"
+ *               ratingsAverage: 4.7
+ *               ratingsQuantity: 12
+ *               createdAt: "2026-01-30T10:00:00.000Z"
+ *               updatedAt: "2026-01-30T10:00:00.000Z"
  */
 router.post(
     '/', 
