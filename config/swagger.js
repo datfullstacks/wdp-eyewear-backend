@@ -50,38 +50,80 @@ const swaggerOptions = {
         },
         Product: {
           type: 'object',
+          required: ['name', 'type', 'brand', 'pricing', 'inventory'],
           properties: {
             id: { type: 'string', description: 'Product ID' },
             name: { type: 'string', description: 'Product name' },
             slug: { type: 'string', description: 'SEO-friendly slug' },
             description: { type: 'string', description: 'Product description' },
-            type: { type: 'string', enum: ['frame', 'lens', 'sunglasses', 'accessories'], description: 'Product type' },
+            type: {
+              type: 'string',
+              enum: ['sunglasses', 'frame', 'lens', 'contact_lens', 'accessory', 'service', 'bundle', 'gift_card', 'other'],
+              description: 'Product type'
+            },
             brand: { type: 'string', description: 'Brand' },
-            basePrice: { type: 'number', description: 'Base price' },
-            specs: {
+            pricing: {
               type: 'object',
+              required: ['currency', 'basePrice'],
               properties: {
-                material: { type: 'string', description: 'Material' },
-                shape: { type: 'string', description: 'Shape' },
-                gender: { type: 'string', enum: ['men', 'women', 'unisex', 'kids'], description: 'Gender' },
-                lensType: { type: 'string', description: 'Lens type' }
+                currency: { type: 'string', description: 'Currency (ISO 4217)' },
+                basePrice: { type: 'number', description: 'Base price' },
+                msrp: { type: 'number', description: 'List price' },
+                salePrice: { type: 'number', description: 'Sale price' },
+                discountPercent: { type: 'number', description: 'Discount percent' },
+                taxRate: { type: 'number', description: 'Tax rate (%)' }
               }
             },
+            inventory: {
+              type: 'object',
+              required: ['track'],
+              properties: {
+                track: { type: 'boolean', description: 'Track inventory' },
+                threshold: { type: 'integer', description: 'Low stock threshold' }
+              }
+            },
+            specs: { type: 'object', description: 'Type-specific specs (see product.md)' },
             variants: {
               type: 'array',
               items: {
                 type: 'object',
                 properties: {
                   sku: { type: 'string', description: 'SKU' },
-                  color: { type: 'string', description: 'Color' },
-                  size: { type: 'string', description: 'Size' },
+                  barcode: { type: 'string', description: 'Barcode' },
+                  options: {
+                    type: 'object',
+                    properties: {
+                      color: { type: 'string' },
+                      size: { type: 'string' }
+                    }
+                  },
                   price: { type: 'number', description: 'Variant price' },
                   stock: { type: 'number', description: 'Stock quantity' },
-                  images: { type: 'array', items: { type: 'string' }, description: 'Image URLs' }
+                  warehouseLocation: { type: 'string', description: 'Warehouse location' },
+                  assetIds: { type: 'array', items: { type: 'string' } }
                 }
               }
             },
-            status: { type: 'string', enum: ['active', 'inactive', 'out_of_stock'], description: 'Product status' },
+            media: {
+              type: 'object',
+              properties: {
+                primaryAssetId: { type: 'string' },
+                assets: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      assetType: { type: 'string', enum: ['2d', '3d'] },
+                      role: { type: 'string' },
+                      url: { type: 'string' },
+                      format: { type: 'string' },
+                      posterUrl: { type: 'string' }
+                    }
+                  }
+                }
+              }
+            },
+            status: { type: 'string', enum: ['draft', 'active', 'inactive', 'out_of_stock'], description: 'Product status' },
             ratingsAverage: { type: 'number', description: 'Average rating' },
             ratingsQuantity: { type: 'number', description: 'Number of ratings' },
             createdAt: { type: 'string', format: 'date-time' },

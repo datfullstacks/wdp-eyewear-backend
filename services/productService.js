@@ -1,12 +1,19 @@
+
 const Product = require('../models/Product');
 const AppError = require('../errors/AppError');
+
+const slugify = (value = '') => value
+  .toString()
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '');
 
 class ProductService {
     // Create
     async createProduct(productData) {
-        // Tạo slug đơn giản từ name (hoặc dùng thư viện slugify nếu muốn chuẩn hơn)
         if (!productData.slug) {
-            productData.slug = productData.name.toLowerCase().split(' ').join('-');
+            productData.slug = slugify(productData.name);
         }
         
         const product = await Product.create(productData);
@@ -28,9 +35,9 @@ class ProductService {
         
         // Price Range
         if (filters.minPrice || filters.maxPrice) {
-            queryObj.basePrice = {};
-            if (filters.minPrice) queryObj.basePrice.$gte = Number(filters.minPrice);
-            if (filters.maxPrice) queryObj.basePrice.$lte = Number(filters.maxPrice);
+            queryObj['pricing.basePrice'] = {};
+            if (filters.minPrice) queryObj['pricing.basePrice'].$gte = Number(filters.minPrice);
+            if (filters.maxPrice) queryObj['pricing.basePrice'].$lte = Number(filters.maxPrice);
         }
 
         const [products, total] = await Promise.all([
@@ -63,6 +70,10 @@ class ProductService {
 
     // Update
     async updateProduct(id, updateData) {
+        // Nếu đổi name mà không gửi slug mới, tự slugify để đồng bộ URL
+        if (updateData.name && !updateData.slug) {
+            updateData.slug = slugify(updateData.name);
+        }
         const product = await Product.findByIdAndUpdate(id, updateData, {
             new: true,
             runValidators: true
@@ -73,7 +84,7 @@ class ProductService {
         return product;
     }
 
-    // Delete (Soft delete logic thường tốt hơn, nhưng ở đây làm hard delete theo CRUD)
+    // Delete (hard delete)
     async deleteProduct(id) {
         const product = await Product.findByIdAndDelete(id);
         if (!product) {
