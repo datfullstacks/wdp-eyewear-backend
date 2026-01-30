@@ -40,68 +40,68 @@ const swaggerOptions = {
         User: {
           type: 'object',
           properties: {
-            id: {
-              type: 'string',
-              description: 'User ID'
+            id: { type: 'string', description: 'User ID' },
+            name: { type: 'string', description: 'User full name' },
+            email: { type: 'string', format: 'email', description: 'User email address' },
+            role: { type: 'string', enum: ['customer', 'sales', 'operations', 'manager', 'admin'], description: 'User role' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' }
+          }
+        },
+        Product: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Product ID' },
+            name: { type: 'string', description: 'Product name' },
+            slug: { type: 'string', description: 'SEO-friendly slug' },
+            description: { type: 'string', description: 'Product description' },
+            type: { type: 'string', enum: ['frame', 'lens', 'sunglasses', 'accessories'], description: 'Product type' },
+            brand: { type: 'string', description: 'Brand' },
+            basePrice: { type: 'number', description: 'Base price' },
+            specs: {
+              type: 'object',
+              properties: {
+                material: { type: 'string', description: 'Material' },
+                shape: { type: 'string', description: 'Shape' },
+                gender: { type: 'string', enum: ['men', 'women', 'unisex', 'kids'], description: 'Gender' },
+                lensType: { type: 'string', description: 'Lens type' }
+              }
             },
-            name: {
-              type: 'string',
-              description: 'User full name'
+            variants: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  sku: { type: 'string', description: 'SKU' },
+                  color: { type: 'string', description: 'Color' },
+                  size: { type: 'string', description: 'Size' },
+                  price: { type: 'number', description: 'Variant price' },
+                  stock: { type: 'number', description: 'Stock quantity' },
+                  images: { type: 'array', items: { type: 'string' }, description: 'Image URLs' }
+                }
+              }
             },
-            email: {
-              type: 'string',
-              format: 'email',
-              description: 'User email address'
-            },
-            role: {
-              type: 'string',
-              enum: ['customer', 'sales', 'operations', 'manager', 'admin'],
-              description: 'User role'
-            },
-            createdAt: {
-              type: 'string',
-              format: 'date-time'
-            },
-            updatedAt: {
-              type: 'string',
-              format: 'date-time'
-            }
+            status: { type: 'string', enum: ['active', 'inactive', 'out_of_stock'], description: 'Product status' },
+            ratingsAverage: { type: 'number', description: 'Average rating' },
+            ratingsQuantity: { type: 'number', description: 'Number of ratings' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' }
           }
         },
         Error: {
           type: 'object',
           properties: {
-            success: {
-              type: 'boolean',
-              example: false
-            },
-            message: {
-              type: 'string',
-              description: 'Error message'
-            },
-            errors: {
-              type: 'array',
-              items: {
-                type: 'object'
-              }
-            }
+            success: { type: 'boolean', example: false },
+            message: { type: 'string', description: 'Error message' },
+            errors: { type: 'array', items: { type: 'object' } }
           }
         },
         Success: {
           type: 'object',
           properties: {
-            success: {
-              type: 'boolean',
-              example: true
-            },
-            message: {
-              type: 'string',
-              description: 'Success message'
-            },
-            data: {
-              type: 'object',
-              description: 'Response data'
-            }
+            success: { type: 'boolean', example: true },
+            message: { type: 'string', description: 'Success message' },
+            data: { type: 'object', description: 'Response data' }
           }
         }
       }
