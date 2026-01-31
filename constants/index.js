@@ -38,7 +38,8 @@ const PAYMENT_METHODS = {
   COD: 'cod',
   CREDIT_CARD: 'credit_card',
   BANK_TRANSFER: 'bank_transfer',
-  E_WALLET: 'e_wallet'
+  E_WALLET: 'e_wallet',
+  SEPAY: 'sepay' // current accepted method
 };
 
 // Product types

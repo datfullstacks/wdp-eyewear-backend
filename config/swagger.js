@@ -82,6 +82,20 @@ const swaggerOptions = {
                 threshold: { type: 'integer', description: 'Low stock threshold' }
               }
             },
+            preOrder: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean', description: 'Pre-order available' },
+                startAt: { type: 'string', format: 'date-time', description: 'Window open time' },
+                endAt: { type: 'string', format: 'date-time', description: 'Window close time' },
+                shipFrom: { type: 'string', format: 'date-time', description: 'Earliest expected ship/fulfill date' },
+                shipTo: { type: 'string', format: 'date-time', description: 'Latest expected ship/fulfill date' },
+                depositPercent: { type: 'number', description: 'Deposit percent (0 or unset = full charge)' },
+                maxQuantityPerOrder: { type: 'integer', description: 'Limit per order while pre-order' },
+                allowCod: { type: 'boolean', description: 'Allow COD for pre-order' },
+                note: { type: 'string', description: 'Message for FE to show customers' }
+              }
+            },
             specs: { type: 'object', description: 'Type-specific specs (see product.md)' },
             variants: {
               type: 'array',
