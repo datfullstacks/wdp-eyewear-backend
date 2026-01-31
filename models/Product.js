@@ -162,6 +162,18 @@ const productSchema = new Schema({
     threshold: { type: Number, min: 0 }
   },
 
+  preOrder: {
+    enabled: { type: Boolean, default: false },
+    startAt: Date,           // when pre-order window opens
+    endAt: Date,             // when pre-order window closes
+    shipFrom: Date,          // earliest expected fulfill/ship date
+    shipTo: Date,            // latest expected fulfill/ship date
+    depositPercent: { type: Number, min: 0, max: 100 }, // 0 or undefined = full payment
+    maxQuantityPerOrder: { type: Number, min: 1 },
+    allowCod: { type: Boolean, default: true },
+    note: String             // FE note (e.g. "Ships in week 3/2")
+  },
+
   fulfillment: {
     supplier: String,
     leadTime: String,

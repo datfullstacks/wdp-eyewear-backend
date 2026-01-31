@@ -172,6 +172,32 @@ exports.createProductRules = [
     .optional()
     .isInt({ min: 0 }).withMessage('inventory.threshold must be >= 0'),
 
+  // Pre-order (optional)
+  body('preOrder.enabled').optional().isBoolean(),
+  body('preOrder.startAt').optional().isISO8601(),
+  body('preOrder.endAt').optional().isISO8601(),
+  body('preOrder.shipFrom').optional().isISO8601(),
+  body('preOrder.shipTo').optional().isISO8601(),
+  body('preOrder.depositPercent').optional().isFloat({ min: 0, max: 100 }),
+  body('preOrder.maxQuantityPerOrder').optional().isInt({ min: 1 }),
+  body('preOrder.allowCod').optional().isBoolean(),
+  body('preOrder.note').optional().isString().isLength({ max: 200 }),
+  body().custom((value, { req }) => {
+    const po = req.body?.preOrder;
+    if (po?.enabled) {
+      if (!po.shipFrom && !po.shipTo) {
+        throw new Error('preOrder.shipFrom or preOrder.shipTo is required when preOrder.enabled is true');
+      }
+      if (po.startAt && po.endAt && new Date(po.endAt) < new Date(po.startAt)) {
+        throw new Error('preOrder.endAt must be after preOrder.startAt');
+      }
+      if (po.shipFrom && po.shipTo && new Date(po.shipTo) < new Date(po.shipFrom)) {
+        throw new Error('preOrder.shipTo must be after preOrder.shipFrom');
+      }
+    }
+    return true;
+  }),
+
   body('variants')
     .optional()
     .isArray().withMessage('variants must be an array'),
@@ -208,6 +234,32 @@ exports.updateProductRules = [
 
   body('inventory.track').optional().isBoolean(),
   body('inventory.threshold').optional().isInt({ min: 0 }),
+
+  // Pre-order (optional)
+  body('preOrder.enabled').optional().isBoolean(),
+  body('preOrder.startAt').optional().isISO8601(),
+  body('preOrder.endAt').optional().isISO8601(),
+  body('preOrder.shipFrom').optional().isISO8601(),
+  body('preOrder.shipTo').optional().isISO8601(),
+  body('preOrder.depositPercent').optional().isFloat({ min: 0, max: 100 }),
+  body('preOrder.maxQuantityPerOrder').optional().isInt({ min: 1 }),
+  body('preOrder.allowCod').optional().isBoolean(),
+  body('preOrder.note').optional().isString().isLength({ max: 200 }),
+  body().custom((value, { req }) => {
+    const po = req.body?.preOrder;
+    if (po?.enabled) {
+      if (!po.shipFrom && !po.shipTo) {
+        throw new Error('preOrder.shipFrom or preOrder.shipTo is required when preOrder.enabled is true');
+      }
+      if (po.startAt && po.endAt && new Date(po.endAt) < new Date(po.startAt)) {
+        throw new Error('preOrder.endAt must be after preOrder.startAt');
+      }
+      if (po.shipFrom && po.shipTo && new Date(po.shipTo) < new Date(po.shipFrom)) {
+        throw new Error('preOrder.shipTo must be after preOrder.shipFrom');
+      }
+    }
+    return true;
+  }),
 
   body('status').optional().isIn(Object.values(PRODUCT_STATUS)),
 
