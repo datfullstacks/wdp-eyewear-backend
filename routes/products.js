@@ -58,6 +58,31 @@ const {
  *           type: string
  *         order:
  *           type: integer
+ *     PreOrder:
+ *       type: object
+ *       properties:
+ *         enabled:
+ *           type: boolean
+ *         startAt:
+ *           type: string
+ *           format: date-time
+ *         endAt:
+ *           type: string
+ *           format: date-time
+ *         shipFrom:
+ *           type: string
+ *           format: date-time
+ *         shipTo:
+ *           type: string
+ *           format: date-time
+ *         depositPercent:
+ *           type: number
+ *         maxQuantityPerOrder:
+ *           type: integer
+ *         allowCod:
+ *           type: boolean
+ *         note:
+ *           type: string
  *     ProductInput:
  *       type: object
  *       required: [name, type, brand, pricing, inventory]
@@ -96,6 +121,8 @@ const {
  *               type: boolean
  *             threshold:
  *               type: integer
+ *         preOrder:
+ *           $ref: '#/components/schemas/PreOrder'
  *         specs:
  *           type: object
  *           description: Type-specific specs (see product.md)
@@ -142,6 +169,8 @@ const {
  *               type: string
  *             status:
  *               type: string
+ *             preOrder:
+ *               $ref: '#/components/schemas/PreOrder'
  *             ratingsAverage:
  *               type: number
  *             ratingsQuantity:
@@ -279,6 +308,16 @@ router.use(protect);
  *             inventory:
  *               track: true
  *               threshold: 5
+ *             preOrder:
+ *               enabled: true
+ *               startAt: "2026-02-01T00:00:00Z"
+ *               endAt: "2026-02-10T23:59:59Z"
+ *               shipFrom: "2026-02-20T00:00:00Z"
+ *               shipTo: "2026-02-28T00:00:00Z"
+ *               depositPercent: 20
+ *               maxQuantityPerOrder: 2
+ *               allowCod: false
+ *               note: "Pre-order batch ships late Feb"
  *             specs:
  *               common:
  *                 shape: "aviator"
