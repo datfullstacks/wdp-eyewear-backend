@@ -6,6 +6,9 @@ const SEPAY_CLIENT_ID = process.env.SEPAY_CLIENT_ID || '';
 const SEPAY_CLIENT_SECRET = process.env.SEPAY_CLIENT_SECRET || '';
 const SEPAY_WEBHOOK_SECRET = process.env.SEPAY_WEBHOOK_SECRET || '';
 const SEPAY_BANK_ACCOUNT_ID = process.env.SEPAY_BANK_ACCOUNT_ID || '';
+const SEPAY_BANK_ACCOUNT_NUMBER = process.env.SEPAY_BANK_ACCOUNT_NUMBER || '';
+const SEPAY_BANK_NAME = process.env.SEPAY_BANK_NAME || '';
+const SEPAY_BANK_ACCOUNT_NAME = process.env.SEPAY_BANK_ACCOUNT_NAME || '';
 
 const sepayClient = axios.create({
   baseURL: SEPAY_BASE_URL,
@@ -27,5 +30,8 @@ module.exports = {
   sepayClient,
   getAccessToken,
   SEPAY_WEBHOOK_SECRET,
-  SEPAY_BANK_ACCOUNT_ID
+  SEPAY_BANK_ACCOUNT_ID,
+  SEPAY_BANK_ACCOUNT_NUMBER,
+  SEPAY_BANK_NAME,
+  SEPAY_BANK_ACCOUNT_NAME
 };
