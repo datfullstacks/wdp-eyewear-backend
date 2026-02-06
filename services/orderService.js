@@ -1,7 +1,7 @@
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const AppError = require('../errors/AppError');
-const { PAYMENT_METHODS, ORDER_TYPES } = require('../constants');
+const { PAYMENT_METHODS, ORDER_TYPES, ORDER_STATUS } = require('../constants');
 const { generatePaymentCode } = require('../helpers/paymentCode');
 
 function pickPrice(product, variantId) {
@@ -58,8 +58,8 @@ async function quote(itemsInput, shippingFee = 0, discountAmount = 0) {
   const items = await buildItems(itemsInput);
   const { subtotal, payNowTotal, payLaterTotal } = sumAmounts(items);
   const total = subtotal - discountAmount + shippingFee;
-  const payNow = payNowTotal - discountAmount + shippingFee;
-  const payLater = total - payNow;
+  const payNow = Math.max(0, payNowTotal - discountAmount + shippingFee);
+  const payLater = Math.max(0, total - payNow);
   return { items, subtotal, shippingFee, discountAmount, total, payNow, payLater };
 }
 
@@ -89,15 +89,26 @@ async function createOrder({ userId, itemsInput, shippingFee = 0, discountAmount
   return { order, quote: quoteResult };
 }
 
-async function markPaidBySepay(paymentCode, amount, transactionId) {
+async function markPaidBySepay(paymentCode, amount, transactionId, webhookId) {
   const order = await Order.findOne({ paymentCode });
   if (!order) throw new AppError('Order not found', 404);
+
+  if (webhookId && Array.isArray(order.sepayWebhookIds) && order.sepayWebhookIds.includes(String(webhookId))) {
+    return order; // idempotent by webhook event id
+  }
+
   if (transactionId && order.sepayTransactionId === transactionId) {
     return order; // idempotent
   }
+
   const paidEnough = amount >= order.payNowTotal;
   order.paymentStatus = paidEnough ? 'paid' : 'partial';
   order.sepayTransactionId = transactionId;
+
+  if (webhookId) {
+    order.sepayWebhookIds = [...new Set([...(order.sepayWebhookIds || []), String(webhookId)])];
+  }
+
   await order.save();
   return order;
 }

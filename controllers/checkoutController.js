@@ -2,7 +2,31 @@ const asyncHandler = require('../helpers/asyncHandler');
 const ApiResponse = require('../helpers/response');
 const orderService = require('../services/orderService');
 const { PAYMENT_METHODS } = require('../constants');
-const { SEPAY_BANK_ACCOUNT_ID } = require('../config/sepay');
+const {
+  SEPAY_BANK_ACCOUNT_ID,
+  SEPAY_BANK_ACCOUNT_NUMBER,
+  SEPAY_BANK_NAME,
+  SEPAY_BANK_ACCOUNT_NAME
+} = require('../config/sepay');
+
+const buildSepayQrUrl = ({ accountNumber, bankName, amount, description }) => {
+  if (!accountNumber || !bankName) return null;
+
+  const params = [
+    `acc=${encodeURIComponent(accountNumber)}`,
+    `bank=${encodeURIComponent(bankName)}`
+  ];
+
+  if (typeof amount === 'number' && Number.isFinite(amount) && amount > 0) {
+    params.push(`amount=${Math.round(amount)}`);
+  }
+
+  if (description) {
+    params.push(`des=${encodeURIComponent(description)}`);
+  }
+
+  return `https://qr.sepay.vn/img?${params.join('&')}`;
+};
 
 const normalizeInput = (body) => {
   const normalizeNumber = (v, def = 0) => {
@@ -10,11 +34,14 @@ const normalizeInput = (body) => {
     const n = Number(v);
     return Number.isNaN(n) ? def : n;
   };
-  const items = Array.isArray(body.items) ? body.items.map(item => ({
-    productId: item.productId || item.product_id,
-    variantId: item.variantId ?? item.variant_id ?? null,
-    quantity: Number(item.quantity || 0)
-  })) : [];
+
+  const items = Array.isArray(body.items)
+    ? body.items.map((item) => ({
+        productId: item.productId || item.product_id,
+        variantId: item.variantId ?? item.variant_id ?? null,
+        quantity: Number(item.quantity || 0)
+      }))
+    : [];
 
   return {
     items,
@@ -40,6 +67,7 @@ exports.quote = asyncHandler(async (req, res) => {
 exports.create = asyncHandler(async (req, res) => {
   const input = normalizeInput(req.body);
   const userId = req.user?.id;
+
   const { order, quote } = await orderService.createOrder({
     userId,
     itemsInput: input.items,
@@ -51,26 +79,45 @@ exports.create = asyncHandler(async (req, res) => {
   });
 
   const payAmount = quote.payNow;
+  const paymentContent = order.paymentCode;
+  const bankAccountNumber = SEPAY_BANK_ACCOUNT_NUMBER || SEPAY_BANK_ACCOUNT_ID || null;
+  const bankName = SEPAY_BANK_NAME || null;
+  const paymentDescription = 'Chuyen khoan SePay - nhap dung noi dung de tu dong xac nhan';
+
   const paymentInstructions = {
     method: PAYMENT_METHODS.SEPAY,
+    status: 'PENDING_QR',
     amount: payAmount,
     currency: 'VND',
     paymentCode: order.paymentCode,
-    content: `WDP ${order.paymentCode}`,
-    bankAccountId: SEPAY_BANK_ACCOUNT_ID,
-    description: 'Chuyển khoản Sepay - nhập đúng nội dung để tự động xác nhận'
+    content: paymentContent,
+    bankAccountId: SEPAY_BANK_ACCOUNT_ID || null,
+    bankAccountNumber,
+    bankName,
+    bankAccountName: SEPAY_BANK_ACCOUNT_NAME || null,
+    description: paymentDescription,
+    qrUrl: buildSepayQrUrl({
+      accountNumber: bankAccountNumber,
+      bankName,
+      amount: payAmount,
+      description: paymentContent
+    })
   };
 
-  ApiResponse.created(res, {
-    orderId: order._id,
-    payment: paymentInstructions,
-    breakdown: {
-      subtotal: quote.subtotal,
-      shippingFee: quote.shippingFee,
-      discountAmount: quote.discountAmount,
-      total: quote.total,
-      payNow: quote.payNow,
-      payLater: quote.payLater
-    }
-  }, 'Checkout created. Proceed with Sepay payment.');
+  ApiResponse.created(
+    res,
+    {
+      orderId: order._id,
+      payment: paymentInstructions,
+      breakdown: {
+        subtotal: quote.subtotal,
+        shippingFee: quote.shippingFee,
+        discountAmount: quote.discountAmount,
+        total: quote.total,
+        payNow: quote.payNow,
+        payLater: quote.payLater
+      }
+    },
+    'Checkout created. Proceed with Sepay payment.'
+  );
 });
