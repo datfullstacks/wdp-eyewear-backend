@@ -7,8 +7,8 @@ const { registerRules, loginRules, validate } = require('../middlewares/validato
 /**
  * @swagger
  * tags:
- *   name: Authentication
- *   description: User authentication endpoints
+ *   - name: Authentication
+ *     description: User authentication endpoints
  */
 
 /**
@@ -139,12 +139,13 @@ router.post('/login', loginRules, validate, login);
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - accessToken
  *             properties:
  *               accessToken:
  *                 type: string
- *                 description: Supabase access_token from OAuth browser flow
+ *                 description: Supabase access token from client session
+ *               idToken:
+ *                 type: string
+ *                 description: Google ID token (backend exchanges via Supabase)
  *     responses:
  *       200:
  *         description: Google login successful
