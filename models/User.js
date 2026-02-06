@@ -12,12 +12,24 @@ const userSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: true
+        // Not required for Google OAuth users
     },
     role: {
         type: String,
         enum: ['customer', 'sales', 'operations', 'manager', 'admin'],
         default: 'customer'
+    },
+    provider: {
+        type: String,
+        enum: ['local', 'google'],
+        default: 'local'
+    },
+    googleId: {
+        type: String,
+        sparse: true
+    },
+    avatar: {
+        type: String
     }
 }, {
     timestamps: true
