@@ -15,6 +15,16 @@ exports.login = asyncHandler(async (req, res) => {
     ApiResponse.success(res, result, 'Login successful');
 });
 
+// Google Login (via Supabase OAuth)
+exports.googleLogin = asyncHandler(async (req, res) => {
+    const { accessToken } = req.body;
+    if (!accessToken) {
+        return res.status(400).json({ success: false, message: 'accessToken is required' });
+    }
+    const result = await authService.loginWithGoogle(accessToken);
+    ApiResponse.success(res, result, 'Google login successful');
+});
+
 // Get current user
 exports.getMe = asyncHandler(async (req, res) => {
     const user = await authService.getUserById(req.user.id);
