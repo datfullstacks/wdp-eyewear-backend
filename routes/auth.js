@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { register, login, getMe } = require('../controllers/authController');
+const { register, login, googleLogin, getMe } = require('../controllers/authController');
 const { protect } = require('../middlewares/auth');
 const { registerRules, loginRules, validate } = require('../middlewares/validator');
 
@@ -126,6 +126,48 @@ router.post('/register', registerRules, validate, register);
  *         description: Invalid credentials
  */
 router.post('/login', loginRules, validate, login);
+
+/**
+ * @swagger
+ * /api/auth/google:
+ *   post:
+ *     summary: Login with Google (via Supabase)
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - accessToken
+ *             properties:
+ *               accessToken:
+ *                 type: string
+ *                 description: Supabase access_token from OAuth browser flow
+ *     responses:
+ *       200:
+ *         description: Google login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *                     token:
+ *                       type: string
+ *       401:
+ *         description: Google authentication failed
+ */
+router.post('/google', googleLogin);
 
 /**
  * @swagger
