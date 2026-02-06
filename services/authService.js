@@ -18,17 +18,14 @@ class AuthService {
   async register(userData) {
     const { name, email, password, role } = userData;
 
-    // Check if user exists
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       throw new AppError('User already exists', 400);
     }
 
-    // Hash password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // Create user
     const user = await User.create({
       name,
       email,
@@ -37,7 +34,6 @@ class AuthService {
       role: role || 'customer'
     });
 
-    // Generate token
     const token = this.generateToken(user._id, user.role);
 
     return {
@@ -53,24 +49,20 @@ class AuthService {
 
   // Login user
   async login(email, password) {
-    // Check if user exists
     const user = await User.findOne({ email });
     if (!user) {
       throw new AppError('Invalid credentials', 401);
     }
 
-    // Google users cannot login with email/password
     if (user.provider === 'google' && !user.password) {
-      throw new AppError('Tài khoản này sử dụng Google. Vui lòng đăng nhập bằng Google.', 401);
+      throw new AppError('This account uses Google sign-in. Please login with Google.', 401);
     }
 
-    // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       throw new AppError('Invalid credentials', 401);
     }
 
-    // Generate token
     const token = this.generateToken(user._id, user.role);
 
     return {
@@ -85,15 +77,38 @@ class AuthService {
     };
   }
 
-  // Login with Google (via Supabase OAuth – verify accessToken)
-  async loginWithGoogle(accessToken) {
+  // Login with Google via Supabase.
+  // Supports either Supabase accessToken or Google idToken.
+  async loginWithGoogle({ accessToken, idToken }) {
     if (!supabaseAuth) {
       throw new AppError('Supabase is not configured', 500);
     }
 
-    // Verify Supabase access_token → lấy user info
+    if (!accessToken && !idToken) {
+      throw new AppError('accessToken or idToken is required', 400);
+    }
+
+    let supabaseAccessToken = accessToken;
+
+    if (!supabaseAccessToken && idToken) {
+      const { data: signInData, error: signInError } =
+        await supabaseAuth.auth.signInWithIdToken({
+          provider: 'google',
+          token: idToken
+        });
+
+      if (signInError || !signInData?.session?.access_token) {
+        throw new AppError(
+          `Google authentication failed: ${signInError?.message || 'Invalid Google idToken'}`,
+          401
+        );
+      }
+
+      supabaseAccessToken = signInData.session.access_token;
+    }
+
     const { data: userData, error: supabaseError } =
-      await supabaseAuth.auth.getUser(accessToken);
+      await supabaseAuth.auth.getUser(supabaseAccessToken);
 
     if (supabaseError || !userData?.user) {
       throw new AppError(
@@ -112,20 +127,17 @@ class AuthService {
       throw new AppError('Could not retrieve email from Google account', 400);
     }
 
-    // Find or create user in MongoDB
     let user = await User.findOne({ email });
 
     if (!user) {
-      // Create new user for Google sign-in (no password)
       user = await User.create({
         name: fullName || email.split('@')[0],
         email,
         provider: 'google',
         googleId,
-        avatar: avatarUrl,
+        avatar: avatarUrl
       });
     } else {
-      // Link Google info to existing account if not linked yet
       let needsSave = false;
       if (!user.googleId) {
         user.googleId = googleId;
@@ -147,9 +159,10 @@ class AuthService {
         email: user.email,
         role: user.role,
         avatar: user.avatar,
-        provider: user.provider,
+        provider: user.provider
       },
       token,
+      supabaseAccessToken
     };
   }
 
