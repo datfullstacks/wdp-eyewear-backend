@@ -15,7 +15,11 @@ const AppError = require('./errors/AppError');
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
 var authRouter = require('./routes/auth');
+var uploadRouter = require('./routes/upload');
 var productsRouter = require('./routes/products');
+var checkoutRouter = require('./routes/checkout');
+var paymentsRouter = require('./routes/payments');
+var ordersRouter = require('./routes/orders');
 
 var app = express();
 
@@ -48,7 +52,11 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs, {
 app.use('/', indexRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/users', usersRouter);
+app.use('/api/uploads', uploadRouter);
 app.use('/api/products', productsRouter);
+app.use('/api/checkout', checkoutRouter);
+app.use('/api/payments', paymentsRouter);
+app.use('/api/orders', ordersRouter);
 
 // Handle undefined routes
 app.all('*', (req, res, next) => {

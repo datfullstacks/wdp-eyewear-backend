@@ -48,6 +48,7 @@ tmp/
 dist/
 build/
 out/
+seeds/
 
 # Database
 *.sqlite
@@ -95,6 +96,7 @@ coverage/
 .fusebox/
 .dynamodb/
 .tern-port
+product.md
 
 # Optional npm cache directory
 .npm
