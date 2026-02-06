@@ -42,8 +42,9 @@ const OrderSchema = new mongoose.Schema({
   shippingMethod: { type: String, enum: ['standard', 'express'], default: 'standard' },
   shippingAddress: ShippingAddressSchema,
   note: String,
-  paymentCode: { type: String, index: true },
+  paymentCode: { type: String },
   sepayTransactionId: String,
+  sepayWebhookIds: { type: [String], default: [] },
   orderType: { type: String, enum: Object.values(ORDER_TYPES), default: ORDER_TYPES.READY_STOCK },
   status: { type: String, enum: Object.values(ORDER_STATUS), default: ORDER_STATUS.PENDING }
 }, { timestamps: true });
