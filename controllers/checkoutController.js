@@ -11,7 +11,6 @@ const {
 
 const buildSepayQrUrl = ({ accountNumber, bankName, amount, description }) => {
   if (!accountNumber || !bankName) return null;
-
   const params = [
     `acc=${encodeURIComponent(accountNumber)}`,
     `bank=${encodeURIComponent(bankName)}`
@@ -82,7 +81,8 @@ exports.create = asyncHandler(async (req, res) => {
   const paymentContent = order.paymentCode;
   const bankAccountNumber = SEPAY_BANK_ACCOUNT_NUMBER || SEPAY_BANK_ACCOUNT_ID || null;
   const bankName = SEPAY_BANK_NAME || null;
-  const paymentDescription = 'Chuyen khoan SePay - nhap dung noi dung de tu dong xac nhan';
+  const paymentDescription = `Nhap dung noi dung: ${paymentContent}`;
+  const paymentInstruction = 'Chuyen khoan SePay va giu nguyen noi dung de he thong tu dong xac nhan';
 
   const paymentInstructions = {
     method: PAYMENT_METHODS.SEPAY,
@@ -96,6 +96,7 @@ exports.create = asyncHandler(async (req, res) => {
     bankName,
     bankAccountName: SEPAY_BANK_ACCOUNT_NAME || null,
     description: paymentDescription,
+    instruction: paymentInstruction,
     qrUrl: buildSepayQrUrl({
       accountNumber: bankAccountNumber,
       bankName,
