@@ -38,18 +38,6 @@ function getClientIp(req) {
   }
   return req.ip || req.connection?.remoteAddress || 'unknown';
 }
-
-<<<<<<< HEAD
-=======
-function getClientIp(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.length) {
-    return forwarded.split(',')[0].trim();
-  }
-  return req.ip || req.connection?.remoteAddress || 'unknown';
-}
-
->>>>>>> 91b2b1b (update(payment): edit qr display)
 exports.sepayWebhook = asyncHandler(async (req, res) => {
   const startedAt = Date.now();
   const payload = req.body || {};
