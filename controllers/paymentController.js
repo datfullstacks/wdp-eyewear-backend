@@ -1,6 +1,7 @@
 const asyncHandler = require('../helpers/asyncHandler');
 const orderService = require('../services/orderService');
 const { SEPAY_WEBHOOK_SECRET } = require('../config/sepay');
+const WEBHOOK_LOG_PREFIX = '[SEPAY_WEBHOOK]';
 
 // Simple shared secret check
 function verifySignature(req) {
@@ -32,29 +33,68 @@ function normalizePaymentCode(rawCode) {
   return paymentCode.replace('--', '-');
 }
 
-exports.sepayWebhook = asyncHandler(async (req, res) => {
-  if (!verifySignature(req)) {
-    return res.status(401).json({ success: false, message: 'Invalid signature' });
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.length) {
+    return forwarded.split(',')[0].trim();
   }
+  return req.ip || req.connection?.remoteAddress || 'unknown';
+}
 
+exports.sepayWebhook = asyncHandler(async (req, res) => {
+  const startedAt = Date.now();
   const payload = req.body || {};
   const transferType = String(payload?.transferType || payload?.transfer_type || payload?.type || '').toLowerCase();
-  if (transferType && transferType !== 'in') {
-    return res.status(200).json({ success: true, message: 'Ignored non-incoming transfer' });
-  }
-
-  const content = payload?.code || payload?.description || payload?.content || '';
   const amount = Number(payload?.amount || payload?.transferAmount || payload?.amount_vnd || 0);
   const webhookId = payload?.id || payload?.webhook_id || payload?.event_id || '';
   const transactionId = payload?.referenceCode || payload?.reference_code || payload?.transaction_id || payload?.txid || payload?.id || '';
-
+  const content = payload?.code || payload?.description || payload?.content || '';
   const paymentCode = normalizePaymentCode(payload?.code || content);
+
+  console.log(`${WEBHOOK_LOG_PREFIX} incoming`, {
+    webhookId,
+    transferType,
+    amount,
+    hasPaymentCode: Boolean(paymentCode),
+    ip: getClientIp(req),
+    userAgent: req.headers['user-agent'] || 'unknown'
+  });
+
+  if (!verifySignature(req)) {
+    console.warn(`${WEBHOOK_LOG_PREFIX} invalid signature`, {
+      webhookId,
+      ip: getClientIp(req)
+    });
+    return res.status(401).json({ success: false, message: 'Invalid signature' });
+  }
+
+  if (transferType && transferType !== 'in') {
+    console.log(`${WEBHOOK_LOG_PREFIX} ignored non-incoming transfer`, {
+      webhookId,
+      transferType
+    });
+    return res.status(200).json({ success: true, message: 'Ignored non-incoming transfer' });
+  }
   if (!paymentCode) {
+    console.warn(`${WEBHOOK_LOG_PREFIX} missing payment code`, {
+      webhookId,
+      transactionId,
+      contentPreview: String(content || '').slice(0, 64)
+    });
     return res.status(200).json({ success: true, message: 'No payment code' });
   }
 
   try {
     const order = await orderService.markPaidBySepay(paymentCode, amount, transactionId, webhookId);
+    console.log(`${WEBHOOK_LOG_PREFIX} order updated`, {
+      webhookId,
+      paymentCode,
+      transactionId,
+      amount,
+      orderId: String(order._id),
+      paymentStatus: order.paymentStatus,
+      elapsedMs: Date.now() - startedAt
+    });
     return res.status(200).json({
       success: true,
       message: 'Order updated',
@@ -62,6 +102,14 @@ exports.sepayWebhook = asyncHandler(async (req, res) => {
       paymentStatus: order.paymentStatus
     });
   } catch (err) {
+    console.error(`${WEBHOOK_LOG_PREFIX} update failed`, {
+      webhookId,
+      paymentCode,
+      transactionId,
+      amount,
+      error: err.message,
+      elapsedMs: Date.now() - startedAt
+    });
     return res.status(200).json({ success: false, message: err.message });
   }
 });
