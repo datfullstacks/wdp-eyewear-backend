@@ -23,14 +23,12 @@ function verifySignature(req) {
 
 function normalizePaymentCode(rawCode) {
   if (!rawCode) return null;
-  const normalized = String(rawCode).trim().toUpperCase().replace(/\s+/g, '');
-  const match = normalized.match(/WDP-?\d{6}-\d{4}/);
-  if (!match || !match[0]) return null;
-  let paymentCode = match[0];
-  if (!paymentCode.startsWith('WDP-')) {
-    paymentCode = paymentCode.replace(/^WDP/, 'WDP-');
-  }
-  return paymentCode.replace('--', '-');
+  // Sepay bank memo may strip separators, e.g. "WDP2602077642"
+  const normalized = String(rawCode).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const match = normalized.match(/WDP(\d{10})/);
+  if (!match || !match[1]) return null;
+  const digits = match[1];
+  return `WDP-${digits.slice(0, 6)}-${digits.slice(6)}`;
 }
 
 function getClientIp(req) {
