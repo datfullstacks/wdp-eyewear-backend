@@ -149,10 +149,52 @@ async function cancelOrder(id, currentUser) {
   return order;
 }
 
+async function listOrders(currentUser, options = {}) {
+  if (!currentUser) {
+    throw new AppError('Unauthorized', 401);
+  }
+
+  const page = Math.max(1, Number(options.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));
+  const skip = (page - 1) * limit;
+  const query = {};
+
+  const isStaff = ['admin', 'manager', 'operations', 'sales'].includes(currentUser.role);
+  if (isStaff && options.userId) {
+    query.userId = options.userId;
+  } else {
+    query.userId = currentUser.id;
+  }
+
+  if (options.status) {
+    query.status = String(options.status).trim().toLowerCase();
+  }
+
+  if (options.paymentStatus) {
+    query.paymentStatus = String(options.paymentStatus).trim().toLowerCase();
+  }
+
+  const [orders, total] = await Promise.all([
+    Order.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit),
+    Order.countDocuments(query)
+  ]);
+
+  return {
+    orders,
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit)
+    }
+  };
+}
+
 module.exports = {
   quote,
   createOrder,
   markPaidBySepay,
   getOrderById,
-  cancelOrder
+  cancelOrder,
+  listOrders
 };
