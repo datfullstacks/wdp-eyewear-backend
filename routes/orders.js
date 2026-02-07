@@ -13,6 +13,57 @@ const { validate, validateId } = require('../middlewares/validator');
 
 /**
  * @swagger
+ * /api/orders:
+ *   get:
+ *     summary: List orders of current user (staff can filter by userId)
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: paymentStatus
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Orders list
+ */
+router.get('/', protect, orderController.listOrders);
+
+/**
+ * @swagger
+ * /api/orders/me:
+ *   get:
+ *     summary: List current user orders
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: My orders list
+ */
+router.get('/me', protect, orderController.listMyOrders);
+
+/**
+ * @swagger
  * /api/orders/{id}:
  *   get:
  *     summary: Get order detail (owner or staff)
