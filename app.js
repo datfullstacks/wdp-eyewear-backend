@@ -21,6 +21,7 @@ var checkoutRouter = require('./routes/checkout');
 var paymentsRouter = require('./routes/payments');
 var ordersRouter = require('./routes/orders');
 var supportRouter = require('./routes/support');
+var invoicesRouter = require('./routes/invoices');
 
 var app = express();
 
@@ -59,6 +60,7 @@ app.use('/api/checkout', checkoutRouter);
 app.use('/api/payments', paymentsRouter);
 app.use('/api/orders', ordersRouter);
 app.use('/api/support', supportRouter);
+app.use('/api/invoices', invoicesRouter);
 
 // Handle undefined routes
 app.all('*', (req, res, next) => {
