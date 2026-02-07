@@ -30,6 +30,7 @@ const ShippingAddressSchema = new mongoose.Schema({
 
 const OrderSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Invoice' },
   items: { type: [ItemSchema], required: true },
   subtotal: { type: Number, required: true, min: 0 },
   discountAmount: { type: Number, default: 0, min: 0 },
@@ -39,6 +40,8 @@ const OrderSchema = new mongoose.Schema({
   payLaterTotal: { type: Number, required: true, min: 0 },
   paymentMethod: { type: String, enum: Object.values(PAYMENT_METHODS), required: true },
   paymentStatus: { type: String, enum: ['pending', 'paid', 'partial', 'failed'], default: 'pending' },
+  paidAmount: { type: Number, default: 0, min: 0 },
+  paidAt: { type: Date },
   shippingMethod: { type: String, enum: ['standard', 'express'], default: 'standard' },
   shippingAddress: ShippingAddressSchema,
   note: String,
@@ -50,5 +53,6 @@ const OrderSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 OrderSchema.index({ paymentCode: 1 }, { unique: true, sparse: true });
+OrderSchema.index({ invoiceId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model('Order', OrderSchema);

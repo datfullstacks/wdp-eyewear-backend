@@ -67,7 +67,7 @@ exports.create = asyncHandler(async (req, res) => {
   const input = normalizeInput(req.body);
   const userId = req.user?.id;
 
-  const { order, quote } = await orderService.createOrder({
+  const { order, quote, invoice } = await orderService.createOrder({
     userId,
     itemsInput: input.items,
     shippingFee: input.shippingFee ?? 0,
@@ -109,6 +109,15 @@ exports.create = asyncHandler(async (req, res) => {
     res,
     {
       orderId: order._id,
+      invoice: invoice
+        ? {
+            invoiceId: invoice._id,
+            invoiceCode: invoice.invoiceCode,
+            status: invoice.status,
+            amountDue: invoice.amountDue,
+            total: invoice.total
+          }
+        : null,
       payment: paymentInstructions,
       breakdown: {
         subtotal: quote.subtotal,

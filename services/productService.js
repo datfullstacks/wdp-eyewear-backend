@@ -1,5 +1,6 @@
 
 const Product = require('../models/Product');
+const Order = require('../models/Order');
 const AppError = require('../errors/AppError');
 
 const slugify = (value = '') => value
@@ -86,6 +87,14 @@ class ProductService {
 
     // Delete (hard delete)
     async deleteProduct(id) {
+        const hasOrders = await Order.exists({ 'items.productId': id });
+        if (hasOrders) {
+            throw new AppError(
+                'Product is linked to existing orders and cannot be deleted. Set status to inactive instead.',
+                400
+            );
+        }
+
         const product = await Product.findByIdAndDelete(id);
         if (!product) {
             throw new AppError('Product not found', 404);
