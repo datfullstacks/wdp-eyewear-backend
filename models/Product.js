@@ -227,11 +227,10 @@ const slugify = (value = '') => value
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '');
 
-productSchema.pre('validate', function (next) {
+productSchema.pre('validate', function () {
   if (!this.slug && this.name) {
     this.slug = slugify(this.name);
   }
-  next();
 });
 
 module.exports = mongoose.model('Product', productSchema);
