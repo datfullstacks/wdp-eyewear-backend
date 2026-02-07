@@ -4,7 +4,29 @@ const {
   getAllUsers,
   getUserById,
   updateUser,
-  deleteUser
+  deleteUser,
+  getMyAddresses,
+  addMyAddress,
+  updateMyAddress,
+  deleteMyAddress,
+  setDefaultMyAddress,
+  getMyFavorites,
+  addMyFavorite,
+  removeMyFavorite,
+  clearMyFavorites,
+  getMyPaymentMethods,
+  addMyPaymentMethod,
+  updateMyPaymentMethod,
+  deleteMyPaymentMethod,
+  setDefaultMyPaymentMethod,
+  getMyPrescriptions,
+  addMyPrescription,
+  updateMyPrescription,
+  deleteMyPrescription,
+  setDefaultMyPrescription,
+  getMyNotifications,
+  markMyNotificationAsRead,
+  markAllMyNotificationsAsRead
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middlewares/auth');
 
@@ -17,6 +39,33 @@ const { protect, authorize } = require('../middlewares/auth');
 
 // Protect all routes
 router.use(protect);
+
+router.get('/me/addresses', getMyAddresses);
+router.post('/me/addresses', addMyAddress);
+router.put('/me/addresses/:addressId', updateMyAddress);
+router.delete('/me/addresses/:addressId', deleteMyAddress);
+router.put('/me/addresses/:addressId/default', setDefaultMyAddress);
+
+router.get('/me/favorites', getMyFavorites);
+router.post('/me/favorites', addMyFavorite);
+router.delete('/me/favorites/:productId', removeMyFavorite);
+router.delete('/me/favorites', clearMyFavorites);
+
+router.get('/me/payment-methods', getMyPaymentMethods);
+router.post('/me/payment-methods', addMyPaymentMethod);
+router.put('/me/payment-methods/:methodId', updateMyPaymentMethod);
+router.delete('/me/payment-methods/:methodId', deleteMyPaymentMethod);
+router.put('/me/payment-methods/:methodId/default', setDefaultMyPaymentMethod);
+
+router.get('/me/prescriptions', getMyPrescriptions);
+router.post('/me/prescriptions', addMyPrescription);
+router.put('/me/prescriptions/:prescriptionId', updateMyPrescription);
+router.delete('/me/prescriptions/:prescriptionId', deleteMyPrescription);
+router.put('/me/prescriptions/:prescriptionId/default', setDefaultMyPrescription);
+
+router.get('/me/notifications', getMyNotifications);
+router.put('/me/notifications/read-all', markAllMyNotificationsAsRead);
+router.put('/me/notifications/:notificationId/read', markMyNotificationAsRead);
 
 /**
  * @swagger
