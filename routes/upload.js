@@ -5,13 +5,23 @@ const { supabase, supabaseBucket } = require('../services/supabaseClient');
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-const slugify = (value = '') =>
+const slugifySegment = (value = '') =>
   value
     .toString()
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+
+const normalizeFolderPath = (value = '') => {
+  const segments = value
+    .toString()
+    .split(/[\\/]+/)
+    .map((segment) => slugifySegment(segment))
+    .filter(Boolean);
+
+  return segments.length > 0 ? segments.join('/') : 'uploads';
+};
 
 /**
  * @swagger
@@ -72,8 +82,8 @@ router.post('/', upload.single('file'), async (req, res) => {
     }
 
     const original = req.file.originalname || 'file';
-    const folder = req.body.folder ? slugify(req.body.folder) : 'uploads';
-    const basename = slugify(original.replace(/\.[^/.]+$/, '')) || 'file';
+    const folder = normalizeFolderPath(req.body.folder || '');
+    const basename = slugifySegment(original.replace(/\.[^/.]+$/, '')) || 'file';
     const ext = original.split('.').pop();
     const filename = `${basename}-${Date.now()}.${ext}`;
     const storagePath = `${folder}/${filename}`;

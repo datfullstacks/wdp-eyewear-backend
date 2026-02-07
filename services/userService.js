@@ -1,5 +1,7 @@
 const User = require('../models/User');
 const Product = require('../models/Product');
+const Order = require('../models/Order');
+const Invoice = require('../models/Invoice');
 const AppError = require('../errors/AppError');
 
 class UserService {
@@ -505,6 +507,18 @@ class UserService {
 
   // Delete user
   async deleteUser(userId) {
+    const [orderCount, invoiceCount] = await Promise.all([
+      Order.countDocuments({ userId }),
+      Invoice.countDocuments({ userId })
+    ]);
+
+    if (orderCount > 0 || invoiceCount > 0) {
+      throw new AppError(
+        'User has related orders/invoices and cannot be deleted',
+        400
+      );
+    }
+
     const user = await User.findByIdAndDelete(userId);
     if (!user) {
       throw new AppError('User not found', 404);
