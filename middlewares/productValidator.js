@@ -1,6 +1,6 @@
 
 const { body, query } = require('express-validator');
-const { PRODUCT_TYPES, PRODUCT_STATUS, ACCESSORY_CATEGORIES } = require('../constants');
+const { PRODUCT_TYPES, PRODUCT_STATUS, ACCESSORY_CATEGORIES, TRY_ON_STATUS } = require('../constants');
 
 const createTypeGuards = () => [
   body().custom((value, { req }) => {
@@ -137,6 +137,65 @@ const createTypeGuards = () => [
   })
 ];
 
+const TRY_ON_STATUSES = Object.values(TRY_ON_STATUS);
+
+const extract3dFormats = (assets = []) => {
+  const formats = new Set();
+  for (const asset of assets) {
+    if (!asset || asset.assetType !== '3d') continue;
+    const format = String(asset.format || '').trim().toLowerCase();
+    if (format) formats.add(format);
+  }
+  return formats;
+};
+
+const tryOnPayloadRules = [
+  body('media.tryOn.enabled').optional().isBoolean().withMessage('media.tryOn.enabled must be boolean'),
+  body('media.tryOn.arUrl').optional().isString().withMessage('media.tryOn.arUrl must be a string'),
+  body('media.tryOn.assetIds').optional().isArray().withMessage('media.tryOn.assetIds must be an array'),
+  body('media.tryOn.assetIds.*')
+    .optional()
+    .isMongoId()
+    .withMessage('media.tryOn.assetIds.* must be a valid Mongo ID'),
+  body('media.tryOn.status')
+    .optional()
+    .isIn(TRY_ON_STATUSES)
+    .withMessage(`media.tryOn.status must be one of: ${TRY_ON_STATUSES.join(', ')}`),
+  body('media.tryOn.rejectReason')
+    .optional()
+    .isString()
+    .isLength({ max: 300 })
+    .withMessage('media.tryOn.rejectReason must be at most 300 characters'),
+  body().custom((value, { req }) => {
+    const tryOn = req.body?.media?.tryOn;
+    if (!tryOn) return true;
+
+    const status = String(tryOn.status || '').trim().toLowerCase();
+    if (status === TRY_ON_STATUS.REJECTED && !String(tryOn.rejectReason || '').trim()) {
+      throw new Error('media.tryOn.rejectReason is required when media.tryOn.status is rejected');
+    }
+    return true;
+  }),
+  body().custom((value, { req }) => {
+    const tryOn = req.body?.media?.tryOn;
+    if (!tryOn) return true;
+
+    const status = String(tryOn.status || '').trim().toLowerCase();
+    const shouldValidateAssets =
+      status === TRY_ON_STATUS.APPROVED || status === TRY_ON_STATUS.PUBLISHED;
+    const hasAssetsInPayload = Array.isArray(req.body?.media?.assets);
+    if (!shouldValidateAssets || !hasAssetsInPayload) return true;
+
+    const formats = extract3dFormats(req.body.media.assets);
+    if (!formats.has('glb') || !formats.has('usdz')) {
+      throw new Error(
+        'media.assets must include 3d assets with both glb and usdz when media.tryOn.status is approved or published'
+      );
+    }
+    return true;
+  })
+];
+
 exports.createProductRules = [
     body('name').notEmpty().withMessage('Product name is required'),
     body('type').isIn(Object.values(PRODUCT_TYPES)).withMessage('Invalid product type'),
@@ -210,7 +269,7 @@ exports.createProductRules = [
   body('variants.*.options.size')
     .optional()
     .isString().withMessage('Variant size must be a string')
-].concat(createTypeGuards());
+].concat(tryOnPayloadRules, createTypeGuards());
 
 exports.updateProductRules = [
   body('name').optional().notEmpty(),
@@ -266,7 +325,7 @@ exports.updateProductRules = [
   body('variants').optional().isArray(),
   body('variants.*.price').optional().isFloat({ min: 0 }),
   body('variants.*.stock').optional().isInt({ min: 0 })
-].concat(createTypeGuards());
+].concat(tryOnPayloadRules, createTypeGuards());
 
 exports.filterProductRules = [
   query('page').optional().isInt({ min: 1 }),
