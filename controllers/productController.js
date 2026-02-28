@@ -3,7 +3,7 @@ const asyncHandler = require('../helpers/asyncHandler');
 const ApiResponse = require('../helpers/response');
 
 exports.createProduct = asyncHandler(async (req, res) => {
-    const product = await productService.createProduct(req.body);
+    const product = await productService.createProduct(req.body, req.user);
     ApiResponse.created(res, product, 'Product created successfully');
 });
 
@@ -26,7 +26,7 @@ exports.getProductById = asyncHandler(async (req, res) => {
 });
 
 exports.updateProduct = asyncHandler(async (req, res) => {
-    const product = await productService.updateProduct(req.params.id, req.body);
+    const product = await productService.updateProduct(req.params.id, req.body, req.user);
     ApiResponse.success(res, product, 'Product updated successfully');
 });
 
