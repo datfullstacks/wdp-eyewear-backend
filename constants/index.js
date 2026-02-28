@@ -63,6 +63,16 @@ const PRODUCT_STATUS = {
   OUT_OF_STOCK: 'out_of_stock'
 };
 
+// Try-on status
+const TRY_ON_STATUS = {
+  DRAFT: 'draft',
+  PENDING_REVIEW: 'pending_review',
+  APPROVED: 'approved',
+  PUBLISHED: 'published',
+  REJECTED: 'rejected',
+  ARCHIVED: 'archived'
+};
+
 // HTTP Status codes
 const HTTP_STATUS = {
   // 2xx Success
@@ -117,6 +127,7 @@ module.exports = {
   PAYMENT_METHODS,
   PRODUCT_TYPES,
   PRODUCT_STATUS,
+  TRY_ON_STATUS,
   HTTP_STATUS,
   PAGINATION,
   ACCESSORY_CATEGORIES

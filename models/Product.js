@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { PRODUCT_TYPES, PRODUCT_STATUS } = require('../constants');
+const { PRODUCT_TYPES, PRODUCT_STATUS, TRY_ON_STATUS } = require('../constants');
 
 const { Schema } = mongoose;
 
@@ -196,7 +196,21 @@ const productSchema = new Schema({
     tryOn: {
       enabled: Boolean,
       arUrl: String,
-      assetIds: [Schema.Types.ObjectId]
+      assetIds: [Schema.Types.ObjectId],
+      status: {
+        type: String,
+        enum: Object.values(TRY_ON_STATUS),
+        default: TRY_ON_STATUS.DRAFT
+      },
+      submittedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      submittedAt: Date,
+      approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      approvedAt: Date,
+      rejectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      rejectedAt: Date,
+      rejectReason: { type: String, trim: true },
+      publishedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      publishedAt: Date
     }
   },
 
