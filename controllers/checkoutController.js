@@ -38,7 +38,8 @@ const normalizeInput = (body) => {
     ? body.items.map((item) => ({
         productId: item.productId || item.product_id,
         variantId: item.variantId ?? item.variant_id ?? null,
-        quantity: Number(item.quantity || 0)
+        quantity: Number(item.quantity || 0),
+        customization: item.customization
       }))
     : [];
 
@@ -48,6 +49,7 @@ const normalizeInput = (body) => {
     discountAmount: normalizeNumber(body.discountAmount ?? body.discount_amount, 0),
     shippingMethod: body.shippingMethod || body.shipping_method,
     shippingAddress: body.shippingAddress || body.shipping_address,
+    cartType: body.cartType || body.cart_type,
     note: body.note
   };
 };
@@ -55,7 +57,12 @@ const normalizeInput = (body) => {
 // GET/POST quote checkout
 exports.quote = asyncHandler(async (req, res) => {
   const input = normalizeInput(req.body);
-  const result = await orderService.quote(input.items, input.shippingFee, input.discountAmount);
+  const result = await orderService.quote(
+    input.items,
+    input.shippingFee,
+    input.discountAmount,
+    { cartType: input.cartType }
+  );
   ApiResponse.success(res, {
     ...result,
     paymentMethod: PAYMENT_METHODS.SEPAY
@@ -74,6 +81,7 @@ exports.create = asyncHandler(async (req, res) => {
     discountAmount: input.discountAmount ?? 0,
     shippingMethod: input.shippingMethod || 'standard',
     shippingAddress: input.shippingAddress,
+    cartType: input.cartType,
     note: input.note
   });
 

@@ -170,6 +170,59 @@ class UserService {
     return user.addresses;
   }
 
+  normalizeRefundAccountInput(input = {}, { partial = false } = {}) {
+    const payload = {};
+    const fields = ['bankName', 'accountNumber', 'accountHolder', 'branch', 'phone', 'email', 'note'];
+    for (const field of fields) {
+      if (input[field] === undefined) continue;
+      payload[field] = String(input[field] ?? '').trim();
+    }
+
+    if (!partial) {
+      if (!payload.bankName) throw new AppError('bankName is required', 400);
+      if (!payload.accountNumber) throw new AppError('accountNumber is required', 400);
+      if (!payload.accountHolder) throw new AppError('accountHolder is required', 400);
+    }
+
+    if (payload.email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(payload.email)) {
+        throw new AppError('Invalid email format', 400);
+      }
+    }
+
+    payload.updatedAt = new Date();
+    return payload;
+  }
+
+  async getMyRefundAccount(userId) {
+    const user = await User.findById(userId).select('refundAccount');
+    if (!user) throw new AppError('User not found', 404);
+    return user.refundAccount || null;
+  }
+
+  async upsertMyRefundAccount(userId, input) {
+    const user = await User.findById(userId).select('refundAccount');
+    if (!user) throw new AppError('User not found', 404);
+
+    const existing = user.refundAccount || null;
+    const payload = this.normalizeRefundAccountInput(input, { partial: Boolean(existing) });
+    user.refundAccount = {
+      ...(existing || {}),
+      ...payload
+    };
+    await user.save();
+    return user.refundAccount;
+  }
+
+  async deleteMyRefundAccount(userId) {
+    const user = await User.findById(userId).select('refundAccount');
+    if (!user) throw new AppError('User not found', 404);
+    user.refundAccount = null;
+    await user.save();
+    return null;
+  }
+
   async getMyFavoriteIds(userId) {
     const user = await User.findById(userId).select('favorites');
     if (!user) {

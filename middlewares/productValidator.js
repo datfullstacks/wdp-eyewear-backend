@@ -1,6 +1,7 @@
 
 const { body, query } = require('express-validator');
 const { PRODUCT_TYPES, PRODUCT_STATUS, ACCESSORY_CATEGORIES, TRY_ON_STATUS } = require('../constants');
+const SEASONS = ['spring', 'summer', 'autumn', 'winter', 'all_season'];
 
 const createTypeGuards = () => [
   body().custom((value, { req }) => {
@@ -231,6 +232,31 @@ exports.createProductRules = [
     .optional()
     .isInt({ min: 0 }).withMessage('inventory.threshold must be >= 0'),
 
+  body('seo.season')
+    .optional()
+    .isIn(SEASONS)
+    .withMessage(`seo.season must be one of: ${SEASONS.join(', ')}`),
+  body('seo.seasons')
+    .optional()
+    .isArray()
+    .withMessage('seo.seasons must be an array'),
+  body('seo.seasons.*')
+    .optional()
+    .isIn(SEASONS)
+    .withMessage(`seo.seasons.* must be one of: ${SEASONS.join(', ')}`),
+  body('compatibility.productIds')
+    .optional()
+    .isArray()
+    .withMessage('compatibility.productIds must be an array'),
+  body('compatibility.productIds.*')
+    .optional()
+    .isMongoId()
+    .withMessage('compatibility.productIds.* must be a valid Mongo ID'),
+  body('presetCombo.enabled').optional().isBoolean(),
+  body('presetCombo.frameProductId').optional().isMongoId(),
+  body('presetCombo.lensProductId').optional().isMongoId(),
+  body('presetCombo.defaultNonPrescription').optional().isBoolean(),
+
   // Pre-order (optional)
   body('preOrder.enabled').optional().isBoolean(),
   body('preOrder.startAt').optional().isISO8601(),
@@ -294,6 +320,31 @@ exports.updateProductRules = [
   body('inventory.track').optional().isBoolean(),
   body('inventory.threshold').optional().isInt({ min: 0 }),
 
+  body('seo.season')
+    .optional()
+    .isIn(SEASONS)
+    .withMessage(`seo.season must be one of: ${SEASONS.join(', ')}`),
+  body('seo.seasons')
+    .optional()
+    .isArray()
+    .withMessage('seo.seasons must be an array'),
+  body('seo.seasons.*')
+    .optional()
+    .isIn(SEASONS)
+    .withMessage(`seo.seasons.* must be one of: ${SEASONS.join(', ')}`),
+  body('compatibility.productIds')
+    .optional()
+    .isArray()
+    .withMessage('compatibility.productIds must be an array'),
+  body('compatibility.productIds.*')
+    .optional()
+    .isMongoId()
+    .withMessage('compatibility.productIds.* must be a valid Mongo ID'),
+  body('presetCombo.enabled').optional().isBoolean(),
+  body('presetCombo.frameProductId').optional().isMongoId(),
+  body('presetCombo.lensProductId').optional().isMongoId(),
+  body('presetCombo.defaultNonPrescription').optional().isBoolean(),
+
   // Pre-order (optional)
   body('preOrder.enabled').optional().isBoolean(),
   body('preOrder.startAt').optional().isISO8601(),
@@ -335,6 +386,8 @@ exports.filterProductRules = [
   query('type').optional().isString(),
   query('status').optional().isString(),
   query('brand').optional().isString(),
+  query('season').optional().isIn(SEASONS),
+  query('compatibleWith').optional().isMongoId(),
   query('search').optional().isString(),
   query('sort').optional().isString()
 ];
