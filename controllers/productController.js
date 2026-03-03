@@ -8,12 +8,24 @@ exports.createProduct = asyncHandler(async (req, res) => {
 });
 
 exports.getAllProducts = asyncHandler(async (req, res) => {
-    const { page, limit, search, type, brand, status, minPrice, maxPrice, sort } = req.query;
+    const {
+        page,
+        limit,
+        search,
+        type,
+        brand,
+        status,
+        season,
+        compatibleWith,
+        minPrice,
+        maxPrice,
+        sort
+    } = req.query;
     
     const result = await productService.getAllProducts(
         parseInt(page) || 1,
         parseInt(limit) || 10,
-        { search, type, brand, status, minPrice, maxPrice },
+        { search, type, brand, status, season, compatibleWith, minPrice, maxPrice },
         sort
     );
     
@@ -23,6 +35,22 @@ exports.getAllProducts = asyncHandler(async (req, res) => {
 exports.getProductById = asyncHandler(async (req, res) => {
     const product = await productService.getProductById(req.params.id);
     ApiResponse.success(res, product);
+});
+
+exports.getCompatibleProducts = asyncHandler(async (req, res) => {
+    const { page = 1, limit = 10, type } = req.query;
+    const result = await productService.getCompatibleProducts(req.params.id, {
+        page,
+        limit,
+        type
+    });
+
+    ApiResponse.paginate(
+        res,
+        result.products,
+        result.pagination,
+        'Compatible products retrieved successfully'
+    );
 });
 
 exports.updateProduct = asyncHandler(async (req, res) => {

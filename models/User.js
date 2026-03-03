@@ -141,6 +141,41 @@ const notificationSchema = new mongoose.Schema({
     }
 }, { _id: true, timestamps: true });
 
+const refundAccountSchema = new mongoose.Schema({
+    bankName: {
+        type: String,
+        required: true
+    },
+    accountNumber: {
+        type: String,
+        required: true
+    },
+    accountHolder: {
+        type: String,
+        required: true
+    },
+    branch: {
+        type: String,
+        default: ''
+    },
+    phone: {
+        type: String,
+        default: ''
+    },
+    email: {
+        type: String,
+        default: ''
+    },
+    note: {
+        type: String,
+        default: ''
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
+    }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
     name: {
         type: String,
@@ -191,6 +226,10 @@ const userSchema = new mongoose.Schema({
     notifications: {
         type: [notificationSchema],
         default: []
+    },
+    refundAccount: {
+        type: refundAccountSchema,
+        default: null
     }
 }, {
     timestamps: true

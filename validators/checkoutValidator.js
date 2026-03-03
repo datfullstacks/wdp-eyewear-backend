@@ -10,7 +10,23 @@ const itemRules = [
       return Number.isInteger(n) && n >= 1;
     }).withMessage('quantity must be integer >=1'),
   body(['items.*.variantId', 'items.*.variant_id'])
-    .optional({ nullable: true }).isString().withMessage('variantId must be string')
+    .optional({ nullable: true }).isString().withMessage('variantId must be string'),
+  body('items.*.customization').optional().isObject(),
+  body('items.*.customization.selectedColor').optional().isString(),
+  body('items.*.customization.selectedSize').optional().isString(),
+  body('items.*.customization.photochromic').optional().isBoolean(),
+  body('items.*.customization.note').optional().isString().isLength({ max: 500 }),
+  body('items.*.customization.combineWith').optional().isObject(),
+  body('items.*.customization.combineWith.productId').optional().isMongoId(),
+  body('items.*.customization.combineWith.variantId').optional().isString(),
+  body('items.*.customization.combineWith.note').optional().isString().isLength({ max: 500 }),
+  body('items.*.customization.prescription').optional().isObject(),
+  body('items.*.customization.prescription.mode')
+    .optional()
+    .isIn(['none', 'manual', 'upload']),
+  body('items.*.customization.prescription.isMyopic').optional().isBoolean(),
+  body('items.*.customization.prescription.attachmentUrls').optional().isArray(),
+  body('items.*.customization.prescription.attachmentUrls.*').optional().isURL()
 ];
 
 const shippingRules = [
@@ -21,6 +37,10 @@ const shippingRules = [
   body(['shippingAddress.fullName', 'shipping_address.fullName']).optional().isString(),
   body(['shippingAddress.phone', 'shipping_address.phone']).optional().isString(),
   body(['shippingAddress.line1', 'shipping_address.line1']).optional().isString(),
+  body(['cartType', 'cart_type'])
+    .optional()
+    .isIn(['ready_stock', 'pre_order'])
+    .withMessage('cartType must be ready_stock or pre_order'),
   body('note').optional().isString().isLength({ max: 500 })
 ];
 

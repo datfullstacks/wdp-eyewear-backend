@@ -3,12 +3,13 @@ const ApiResponse = require('../helpers/response');
 const orderService = require('../services/orderService');
 
 exports.listOrders = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, status, paymentStatus, userId } = req.query;
+  const { page = 1, limit = 10, status, paymentStatus, refundStatus, userId } = req.query;
   const result = await orderService.listOrders(req.user, {
     page,
     limit,
     status,
     paymentStatus,
+    refundStatus,
     userId
   });
 
@@ -21,12 +22,13 @@ exports.listOrders = asyncHandler(async (req, res) => {
 });
 
 exports.listMyOrders = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, status, paymentStatus } = req.query;
+  const { page = 1, limit = 10, status, paymentStatus, refundStatus } = req.query;
   const result = await orderService.listOrders(req.user, {
     page,
     limit,
     status,
-    paymentStatus
+    paymentStatus,
+    refundStatus
   });
 
   ApiResponse.paginate(
@@ -43,6 +45,21 @@ exports.getOrder = asyncHandler(async (req, res) => {
 });
 
 exports.cancelOrder = asyncHandler(async (req, res) => {
-  const order = await orderService.cancelOrder(req.params.id, req.user);
+  const order = await orderService.cancelOrder(req.params.id, req.user, req.body);
   ApiResponse.success(res, order, 'Order cancelled');
+});
+
+exports.updateOrderItems = asyncHandler(async (req, res) => {
+  const order = await orderService.updateOrderItems(req.params.id, req.user, req.body);
+  ApiResponse.success(res, order, 'Order items updated');
+});
+
+exports.updateRefundStatus = asyncHandler(async (req, res) => {
+  const order = await orderService.updateRefundStatus(req.params.id, req.user, req.body);
+  ApiResponse.success(res, order, 'Order refund status updated');
+});
+
+exports.updateOrderStatus = asyncHandler(async (req, res) => {
+  const order = await orderService.updateOrderStatus(req.params.id, req.user, req.body.status);
+  ApiResponse.success(res, order, 'Order status updated');
 });

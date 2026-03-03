@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { PRODUCT_TYPES, PRODUCT_STATUS, TRY_ON_STATUS } = require('../constants');
 
 const { Schema } = mongoose;
+const SEASON_VALUES = ['spring', 'summer', 'autumn', 'winter', 'all_season'];
 
 const mediaAssetSchema = new Schema({
   assetType: { type: String, enum: ['2d', '3d'], required: true },
@@ -185,9 +186,22 @@ const productSchema = new Schema({
   seo: {
     modelCode: String,
     collections: [String],
-    season: String,
+    season: { type: String, enum: SEASON_VALUES },
+    seasons: [{ type: String, enum: SEASON_VALUES }],
     keywords: [String],
     countryOfOrigin: String
+  },
+
+  compatibility: {
+    productIds: [{ type: Schema.Types.ObjectId, ref: 'Product' }],
+    notes: String
+  },
+
+  presetCombo: {
+    enabled: { type: Boolean, default: false },
+    frameProductId: { type: Schema.Types.ObjectId, ref: 'Product' },
+    lensProductId: { type: Schema.Types.ObjectId, ref: 'Product' },
+    defaultNonPrescription: { type: Boolean, default: true }
   },
 
   media: {
@@ -233,6 +247,7 @@ const productSchema = new Schema({
 
 productSchema.index({ name: 'text', description: 'text', brand: 'text' });
 productSchema.index({ 'pricing.basePrice': 1, ratingsAverage: -1 });
+productSchema.index({ type: 1, 'seo.season': 1, status: 1 });
 
 const slugify = (value = '') => value
   .toString()
@@ -246,5 +261,13 @@ productSchema.pre('validate', function () {
     this.slug = slugify(this.name);
   }
 });
+
+productSchema.virtual('stockTotal').get(function stockTotal() {
+  const variants = Array.isArray(this.variants) ? this.variants : [];
+  return variants.reduce((sum, variant) => sum + Number(variant?.stock || 0), 0);
+});
+
+productSchema.set('toJSON', { virtuals: true });
+productSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('Product', productSchema);

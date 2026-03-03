@@ -252,6 +252,13 @@ const {
  */
 router.get('/', filterProductRules, validate, productController.getAllProducts);
 
+router.get(
+    '/:id/compatible',
+    validateId,
+    validate,
+    productController.getCompatibleProducts
+);
+
 /**
  * @swagger
  * /api/products/{id}:
