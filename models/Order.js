@@ -84,6 +84,7 @@ const OrderSchema = new mongoose.Schema({
   confirmationDeadlineHours: { type: Number, min: 0, default: 12 },
   shippingMethod: { type: String, enum: ['standard', 'express'], default: 'standard' },
   shippingAddress: ShippingAddressSchema,
+  voucherCode: { type: String, trim: true, uppercase: true, default: '' },
   note: String,
   paymentCode: { type: String },
   sepayTransactionId: String,
