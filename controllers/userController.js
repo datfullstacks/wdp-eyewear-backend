@@ -84,6 +84,21 @@ exports.setDefaultMyAddress = asyncHandler(async (req, res) => {
   ApiResponse.success(res, addresses, 'Default address updated successfully');
 });
 
+exports.getMyRefundAccount = asyncHandler(async (req, res) => {
+  const account = await userService.getMyRefundAccount(req.user.id);
+  ApiResponse.success(res, account, 'Refund account retrieved successfully');
+});
+
+exports.upsertMyRefundAccount = asyncHandler(async (req, res) => {
+  const account = await userService.upsertMyRefundAccount(req.user.id, req.body);
+  ApiResponse.success(res, account, 'Refund account saved successfully');
+});
+
+exports.deleteMyRefundAccount = asyncHandler(async (req, res) => {
+  await userService.deleteMyRefundAccount(req.user.id);
+  ApiResponse.success(res, null, 'Refund account deleted successfully');
+});
+
 // Favorites
 exports.getMyFavorites = asyncHandler(async (req, res) => {
   const favorites = await userService.getMyFavoriteIds(req.user.id);

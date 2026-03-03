@@ -10,6 +10,9 @@ const {
   updateMyAddress,
   deleteMyAddress,
   setDefaultMyAddress,
+  getMyRefundAccount,
+  upsertMyRefundAccount,
+  deleteMyRefundAccount,
   getMyFavorites,
   addMyFavorite,
   removeMyFavorite,
@@ -45,6 +48,10 @@ router.post('/me/addresses', addMyAddress);
 router.put('/me/addresses/:addressId', updateMyAddress);
 router.delete('/me/addresses/:addressId', deleteMyAddress);
 router.put('/me/addresses/:addressId/default', setDefaultMyAddress);
+
+router.get('/me/refund-account', getMyRefundAccount);
+router.put('/me/refund-account', upsertMyRefundAccount);
+router.delete('/me/refund-account', deleteMyRefundAccount);
 
 router.get('/me/favorites', getMyFavorites);
 router.post('/me/favorites', addMyFavorite);

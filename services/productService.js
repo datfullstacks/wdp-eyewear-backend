@@ -1,7 +1,7 @@
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const AppError = require('../errors/AppError');
-const { TRY_ON_STATUS } = require('../constants');
+const { TRY_ON_STATUS, PRODUCT_TYPES, PRODUCT_STATUS } = require('../constants');
 
 const TRY_ON_STATUS_VALUES = new Set(Object.values(TRY_ON_STATUS));
 const OPERATION_ROLE_ALLOWED_TRY_ON_STATUSES = new Set([
@@ -425,6 +425,20 @@ class ProductService {
     if (filters.type) queryObj.type = filters.type;
     if (filters.brand) queryObj.brand = filters.brand;
     if (filters.status) queryObj.status = filters.status;
+    if (filters.compatibleWith) {
+      queryObj['compatibility.productIds'] = filters.compatibleWith;
+    }
+    if (filters.season) {
+      queryObj.$and = queryObj.$and || [];
+      queryObj.$and.push({
+        $or: [
+          { 'seo.season': filters.season },
+          { 'seo.season': 'all_season' },
+          { 'seo.seasons': filters.season },
+          { 'seo.seasons': 'all_season' }
+        ]
+      });
+    }
 
     // Price Range
     if (filters.minPrice || filters.maxPrice) {
@@ -436,6 +450,55 @@ class ProductService {
     const [products, total] = await Promise.all([
       Product.find(queryObj).sort(sort).skip(skip).limit(limit),
       Product.countDocuments(queryObj)
+    ]);
+
+    return {
+      products,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit)
+      }
+    };
+  }
+
+  async getCompatibleProducts(productId, options = {}) {
+    const product = await Product.findById(productId).select('_id type compatibility.productIds');
+    if (!product) throw new AppError('Product not found', 404);
+
+    const page = Math.max(1, Number(options.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));
+    const skip = (page - 1) * limit;
+    const explicitIds = Array.isArray(product?.compatibility?.productIds)
+      ? product.compatibility.productIds.map((id) => String(id))
+      : [];
+
+    const query = {
+      _id: { $ne: product._id },
+      status: PRODUCT_STATUS.ACTIVE
+    };
+
+    if (explicitIds.length > 0) {
+      query._id = { $in: explicitIds };
+    } else {
+      query.$or = [
+        { 'compatibility.productIds': product._id }
+      ];
+    }
+
+    const requestedType = String(options.type || '').trim().toLowerCase();
+    if (requestedType) {
+      query.type = requestedType;
+    } else if (product.type === PRODUCT_TYPES.LENS) {
+      query.type = PRODUCT_TYPES.FRAME;
+    } else if (product.type === PRODUCT_TYPES.FRAME) {
+      query.type = PRODUCT_TYPES.LENS;
+    }
+
+    const [products, total] = await Promise.all([
+      Product.find(query).sort({ 'ratingsAverage': -1, createdAt: -1 }).skip(skip).limit(limit),
+      Product.countDocuments(query)
     ]);
 
     return {

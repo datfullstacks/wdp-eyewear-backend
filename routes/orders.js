@@ -3,6 +3,12 @@ const router = express.Router();
 const orderController = require('../controllers/orderController');
 const { protect } = require('../middlewares/auth');
 const { validate, validateId } = require('../middlewares/validator');
+const {
+  updateOrderItemsRules,
+  cancelOrderRules,
+  updateRefundStatusRules,
+  updateOrderStatusRules
+} = require('../validators/orderValidator');
 
 /**
  * @swagger
@@ -82,6 +88,24 @@ router.get('/me', protect, orderController.listMyOrders);
  */
 router.get('/:id', protect, validateId, validate, orderController.getOrder);
 
+router.put(
+  '/:id/items',
+  protect,
+  validateId,
+  updateOrderItemsRules,
+  validate,
+  orderController.updateOrderItems
+);
+
+router.put(
+  '/:id/status',
+  protect,
+  validateId,
+  updateOrderStatusRules,
+  validate,
+  orderController.updateOrderStatus
+);
+
 /**
  * @swagger
  * /api/orders/{id}/cancel:
@@ -100,6 +124,22 @@ router.get('/:id', protect, validateId, validate, orderController.getOrder);
  *       200:
  *         description: Order cancelled
  */
-router.put('/:id/cancel', protect, validateId, validate, orderController.cancelOrder);
+router.put(
+  '/:id/cancel',
+  protect,
+  validateId,
+  cancelOrderRules,
+  validate,
+  orderController.cancelOrder
+);
+
+router.put(
+  '/:id/refund',
+  protect,
+  validateId,
+  updateRefundStatusRules,
+  validate,
+  orderController.updateRefundStatus
+);
 
 module.exports = router;
