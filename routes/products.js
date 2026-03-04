@@ -408,7 +408,7 @@ router.put(
  * @swagger
  * /api/products/{id}:
  *   delete:
- *     summary: Delete product (Admin only)
+ *     summary: Delete product (Admin/Manager/Ops only)
  *     tags:
  *       - Products
  *     security:
@@ -425,7 +425,7 @@ router.put(
  */
 router.delete(
     '/:id', 
-    authorize('admin'), 
+    authorize('admin', 'manager', 'operations'),
     validateId, 
     validate, 
     productController.deleteProduct
