@@ -41,6 +41,11 @@ const shippingRules = [
     .optional()
     .isIn(['ready_stock', 'pre_order'])
     .withMessage('cartType must be ready_stock or pre_order'),
+  body(['voucherCode', 'voucher_code'])
+    .optional()
+    .isString()
+    .isLength({ min: 1, max: 64 })
+    .withMessage('voucherCode must be a non-empty string'),
   body('note').optional().isString().isLength({ max: 500 })
 ];
 

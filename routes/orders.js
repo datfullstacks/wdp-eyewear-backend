@@ -5,6 +5,7 @@ const { protect } = require('../middlewares/auth');
 const { validate, validateId } = require('../middlewares/validator');
 const {
   updateOrderItemsRules,
+  patchOrderItemRules,
   cancelOrderRules,
   updateRefundStatusRules,
   updateOrderStatusRules
@@ -95,6 +96,15 @@ router.put(
   updateOrderItemsRules,
   validate,
   orderController.updateOrderItems
+);
+
+router.patch(
+  '/:id/items/:itemId',
+  protect,
+  validateId,
+  patchOrderItemRules,
+  validate,
+  orderController.patchOrderItem
 );
 
 router.put(
