@@ -33,6 +33,34 @@ const {
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middlewares/auth');
 
+const CUSTOMER_READONLY_ROLES = new Set(['sales', 'operations']);
+
+const authorizeUsersListRead = (req, res, next) => {
+  const role = String(req.user?.role || '').trim().toLowerCase();
+
+  if (role === 'admin' || role === 'manager') {
+    return next();
+  }
+
+  if (!CUSTOMER_READONLY_ROLES.has(role)) {
+    return res.status(403).json({
+      success: false,
+      message: `User role '${req.user?.role}' is not authorized to access this route`
+    });
+  }
+
+  const requestedRole = String(req.query.role || '').trim().toLowerCase();
+  if (requestedRole && requestedRole !== 'customer') {
+    return res.status(403).json({
+      success: false,
+      message: `User role '${req.user?.role}' can only query customers`
+    });
+  }
+
+  req.query.role = 'customer';
+  return next();
+};
+
 /**
  * @swagger
  * tags:
@@ -78,7 +106,7 @@ router.put('/me/notifications/:notificationId/read', markMyNotificationAsRead);
  * @swagger
  * /api/users:
  *   get:
- *     summary: Get all users (Admin/Manager only)
+ *     summary: Get users list (Admin/Manager full access, Sales/Operations customer-only)
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -106,9 +134,9 @@ router.put('/me/notifications/:notificationId/read', markMyNotificationAsRead);
  *       200:
  *         description: Users retrieved successfully
  *       403:
- *         description: Forbidden - Admin/Manager only
+ *         description: Forbidden
  */
-router.get('/', authorize('admin', 'manager'), getAllUsers);
+router.get('/', authorizeUsersListRead, getAllUsers);
 
 /**
  * @swagger
