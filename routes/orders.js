@@ -22,7 +22,7 @@ const {
  * @swagger
  * /api/orders:
  *   get:
- *     summary: List orders of current user (staff can filter by userId)
+ *     summary: List orders (customer sees own orders, staff sees all and can filter by userId)
  *     tags: [Orders]
  *     security:
  *       - bearerAuth: []
