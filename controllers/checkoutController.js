@@ -50,6 +50,7 @@ const normalizeInput = (body) => {
     shippingMethod: body.shippingMethod || body.shipping_method,
     shippingAddress: body.shippingAddress || body.shipping_address,
     cartType: body.cartType || body.cart_type,
+    voucherCode: body.voucherCode || body.voucher_code,
     note: body.note
   };
 };
@@ -61,7 +62,10 @@ exports.quote = asyncHandler(async (req, res) => {
     input.items,
     input.shippingFee,
     input.discountAmount,
-    { cartType: input.cartType }
+    {
+      cartType: input.cartType,
+      voucherCode: input.voucherCode
+    }
   );
   ApiResponse.success(res, {
     ...result,
@@ -82,6 +86,7 @@ exports.create = asyncHandler(async (req, res) => {
     shippingMethod: input.shippingMethod || 'standard',
     shippingAddress: input.shippingAddress,
     cartType: input.cartType,
+    voucherCode: input.voucherCode,
     note: input.note
   });
 
@@ -134,7 +139,8 @@ exports.create = asyncHandler(async (req, res) => {
         total: quote.total,
         payNow: quote.payNow,
         payLater: quote.payLater
-      }
+      },
+      voucherCode: order.voucherCode || null
     },
     'Checkout created. Proceed with Sepay payment.'
   );

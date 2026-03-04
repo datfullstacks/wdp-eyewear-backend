@@ -1,4 +1,4 @@
-const { body } = require('express-validator');
+const { body, param } = require('express-validator');
 const { ORDER_STATUS } = require('../constants');
 
 const itemBaseRules = [
@@ -43,8 +43,46 @@ exports.updateOrderItemsRules = [
   ...itemBaseRules,
   body(['shippingFee', 'shipping_fee']).optional().isFloat({ min: 0 }),
   body(['discountAmount', 'discount_amount']).optional().isFloat({ min: 0 }),
+  body(['voucherCode', 'voucher_code']).optional().isString().isLength({ min: 1, max: 64 }),
   body(['shippingMethod', 'shipping_method']).optional().isIn(['standard', 'express']),
   body(['shippingAddress', 'shipping_address']).optional().isObject(),
+  body('note').optional().isString().isLength({ max: 500 })
+];
+
+exports.patchOrderItemRules = [
+  param('itemId')
+    .isMongoId()
+    .withMessage('Invalid itemId format'),
+  body(['productId', 'product_id']).optional().isMongoId(),
+  body(['variantId', 'variant_id']).optional({ nullable: true }).isString(),
+  body('quantity')
+    .optional()
+    .custom((value) => {
+      const parsed = Number(value);
+      return Number.isInteger(parsed) && parsed >= 1;
+    })
+    .withMessage('quantity must be integer >= 1'),
+  body('customization').optional().isObject(),
+  body('customization.selectedColor').optional().isString(),
+  body('customization.selectedSize').optional().isString(),
+  body('customization.photochromic').optional().isBoolean(),
+  body('customization.note').optional().isString().isLength({ max: 500 }),
+  body('customization.combineWith').optional().isObject(),
+  body('customization.combineWith.productId').optional().isMongoId(),
+  body('customization.combineWith.variantId').optional().isString(),
+  body('customization.combineWith.note').optional().isString().isLength({ max: 500 }),
+  body('customization.prescription').optional().isObject(),
+  body('customization.prescription.mode')
+    .optional()
+    .isIn(['none', 'manual', 'upload'])
+    .withMessage('prescription mode must be one of: none, manual, upload'),
+  body('customization.prescription.isMyopic').optional().isBoolean(),
+  body('customization.prescription.rightEye').optional().isObject(),
+  body('customization.prescription.leftEye').optional().isObject(),
+  body('customization.prescription.pd').optional().isString(),
+  body('customization.prescription.note').optional().isString().isLength({ max: 500 }),
+  body('customization.prescription.attachmentUrls').optional().isArray(),
+  body('customization.prescription.attachmentUrls.*').optional().isURL(),
   body('note').optional().isString().isLength({ max: 500 })
 ];
 

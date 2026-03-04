@@ -54,6 +54,25 @@ exports.updateOrderItems = asyncHandler(async (req, res) => {
   ApiResponse.success(res, order, 'Order items updated');
 });
 
+exports.patchOrderItem = asyncHandler(async (req, res) => {
+  const result = await orderService.patchOrderItem(
+    req.params.id,
+    req.params.itemId,
+    req.user,
+    req.body
+  );
+
+  ApiResponse.success(
+    res,
+    {
+      order: result.order,
+      updatedItem: result.updatedItem,
+      updatedItemIndex: result.updatedItemIndex
+    },
+    'Order item updated'
+  );
+});
+
 exports.updateRefundStatus = asyncHandler(async (req, res) => {
   const order = await orderService.updateRefundStatus(req.params.id, req.user, req.body);
   ApiResponse.success(res, order, 'Order refund status updated');
