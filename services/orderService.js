@@ -5,6 +5,7 @@ const Invoice = require('../models/Invoice');
 const AppError = require('../errors/AppError');
 const { PAYMENT_METHODS, ORDER_TYPES, ORDER_STATUS, PRODUCT_STATUS } = require('../constants');
 const { generatePaymentCode } = require('../helpers/paymentCode');
+const promotionService = require('./promotionService');
 
 const STAFF_ROLES = new Set(['admin', 'manager', 'operations', 'sales']);
 const PRESCRIPTION_MODES = new Set(['none', 'manual', 'upload']);
@@ -325,6 +326,43 @@ function sumAmounts(items) {
   return { subtotal, payNowTotal, payLaterTotal };
 }
 
+function normalizeVoucherCode(value) {
+  const normalized = toTrimmedString(value, '').toUpperCase();
+  return normalized || null;
+}
+
+function mapOrderItemsToInput(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    productId: item.productId,
+    variantId: item.variantId || null,
+    quantity: item.quantity,
+    customization: item.customization || {}
+  }));
+}
+
+function mergeCustomization(base = {}, patch = {}) {
+  const next = {
+    ...(base || {}),
+    ...(patch || {})
+  };
+
+  if (patch && typeof patch === 'object' && patch.prescription && typeof patch.prescription === 'object') {
+    next.prescription = {
+      ...(base?.prescription || {}),
+      ...patch.prescription
+    };
+  }
+
+  if (patch && typeof patch === 'object' && patch.combineWith && typeof patch.combineWith === 'object') {
+    next.combineWith = {
+      ...(base?.combineWith || {}),
+      ...patch.combineWith
+    };
+  }
+
+  return next;
+}
+
 function mapInvoiceItemsFromOrder(order) {
   const items = Array.isArray(order?.items) ? order.items : [];
   return items.map((item) => ({
@@ -492,10 +530,29 @@ function assertCustomerCanEditOrder(order) {
 
 async function quote(itemsInput, shippingFee = 0, discountAmount = 0, options = {}) {
   const shippingFeeValue = normalizeNonNegativeNumber(shippingFee, 'shippingFee');
-  const discountValue = normalizeNonNegativeNumber(discountAmount, 'discountAmount');
+  const manualDiscount = normalizeNonNegativeNumber(discountAmount, 'discountAmount');
 
   const items = await buildItems(itemsInput, { cartType: options.cartType || null });
   const { subtotal, payNowTotal, payLaterTotal } = sumAmounts(items);
+  const voucherCode = normalizeVoucherCode(options.voucherCode || null);
+
+  let discountValue = manualDiscount;
+  let promotion = null;
+  let appliedVoucherCode = null;
+
+  if (voucherCode) {
+    const resolvedPromotion = await promotionService.resolvePromotion({
+      voucherCode,
+      subtotal,
+      cartType: options.cartType || null,
+      throwOnInvalid: true
+    });
+
+    discountValue = resolvedPromotion.discountAmount;
+    promotion = promotionService.toPromotionMeta(resolvedPromotion.promotion);
+    appliedVoucherCode = resolvedPromotion.voucherCode;
+  }
+
   const total = subtotal - discountValue + shippingFeeValue;
   const payNow = Math.max(0, payNowTotal - discountValue + shippingFeeValue);
   const payLater = Math.max(0, total - payNow);
@@ -509,7 +566,9 @@ async function quote(itemsInput, shippingFee = 0, discountAmount = 0, options = 
     payNow,
     payLater,
     payNowTotal,
-    payLaterTotal
+    payLaterTotal,
+    voucherCode: appliedVoucherCode,
+    promotion
   };
 }
 
@@ -521,7 +580,8 @@ async function createOrder({
   shippingMethod = 'standard',
   shippingAddress,
   note,
-  cartType = null
+  cartType = null,
+  voucherCode = null
 }) {
   if (!userId) {
     throw new AppError('Unauthorized', 401);
@@ -536,7 +596,10 @@ async function createOrder({
     shippingAddress || pickDefaultAddressFromUser(user)
   );
 
-  const quoteResult = await quote(itemsInput, shippingFee, discountAmount, { cartType });
+  const quoteResult = await quote(itemsInput, shippingFee, discountAmount, {
+    cartType,
+    voucherCode
+  });
   const paymentCode = generatePaymentCode();
   const orderType = inferOrderType(quoteResult.items);
   const paidAt = quoteResult.payNow > 0 ? null : new Date();
@@ -560,6 +623,7 @@ async function createOrder({
     confirmationDeadlineHours,
     shippingMethod,
     shippingAddress: resolvedShippingAddress,
+    voucherCode: quoteResult.voucherCode || undefined,
     note,
     paymentCode,
     orderType
@@ -656,10 +720,16 @@ async function updateOrderItems(id, currentUser, payload = {}) {
 
   const shippingFee = payload.shippingFee ?? payload.shipping_fee ?? order.shippingFee ?? 0;
   const discountAmount = payload.discountAmount ?? payload.discount_amount ?? order.discountAmount ?? 0;
+  const voucherCode = normalizeVoucherCode(
+    payload.voucherCode ?? payload.voucher_code ?? order.voucherCode ?? null
+  );
   const cartType = order.orderType === ORDER_TYPES.PRE_ORDER
     ? CART_TYPES.PRE_ORDER
     : CART_TYPES.READY_STOCK;
-  const quoteResult = await quote(itemsInput, shippingFee, discountAmount, { cartType });
+  const quoteResult = await quote(itemsInput, shippingFee, discountAmount, {
+    cartType,
+    voucherCode
+  });
   const nextOrderType = inferOrderType(quoteResult.items);
   if (nextOrderType !== order.orderType) {
     throw new AppError('Order type mismatch. Pre-order and ready-stock items must stay separated', 400);
@@ -672,6 +742,7 @@ async function updateOrderItems(id, currentUser, payload = {}) {
   order.total = quoteResult.total;
   order.payNowTotal = quoteResult.payNow;
   order.payLaterTotal = quoteResult.payLater;
+  order.voucherCode = quoteResult.voucherCode || '';
   if (payload.shippingMethod) {
     order.shippingMethod = payload.shippingMethod;
   }
@@ -728,6 +799,131 @@ async function updateOrderItems(id, currentUser, payload = {}) {
 
   await Promise.all([order.save(), invoice.save()]);
   return Order.findById(order._id).populate(ORDER_POPULATE);
+}
+
+async function patchOrderItem(id, itemId, currentUser, payload = {}) {
+  const order = await Order.findById(id);
+  if (!order) throw new AppError('Order not found', 404);
+
+  const userId = getUserId(currentUser);
+  const isOwner = currentUser && String(order.userId) === String(userId);
+  const staff = isStaff(currentUser);
+  if (!isOwner && !staff) {
+    throw new AppError('Forbidden', 403);
+  }
+
+  if (!staff) {
+    assertCustomerCanEditOrder(order);
+  }
+
+  const existingItems = mapOrderItemsToInput(order.items);
+  const targetIndex = (Array.isArray(order.items) ? order.items : []).findIndex(
+    (item) => String(item?._id) === String(itemId)
+  );
+
+  if (targetIndex < 0) {
+    throw new AppError('Order item not found', 404);
+  }
+
+  const currentItem = existingItems[targetIndex];
+  const nextItem = {
+    ...currentItem
+  };
+
+  const nextProductId = payload.productId || payload.product_id;
+  if (nextProductId) {
+    nextItem.productId = nextProductId;
+  }
+
+  if (payload.variantId !== undefined || payload.variant_id !== undefined) {
+    nextItem.variantId = payload.variantId ?? payload.variant_id ?? null;
+  }
+
+  if (payload.quantity !== undefined) {
+    nextItem.quantity = payload.quantity;
+  }
+
+  if (payload.customization !== undefined) {
+    if (payload.customization && typeof payload.customization === 'object') {
+      nextItem.customization = mergeCustomization(currentItem.customization || {}, payload.customization);
+    } else {
+      nextItem.customization = currentItem.customization || {};
+    }
+  }
+
+  if (payload.note !== undefined) {
+    nextItem.customization = {
+      ...(nextItem.customization || {}),
+      note: toTrimmedString(payload.note, '')
+    };
+  }
+
+  existingItems[targetIndex] = nextItem;
+
+  const shippingFee = order.shippingFee ?? 0;
+  const discountAmount = order.discountAmount ?? 0;
+  const voucherCode = normalizeVoucherCode(order.voucherCode || null);
+  const cartType = order.orderType === ORDER_TYPES.PRE_ORDER
+    ? CART_TYPES.PRE_ORDER
+    : CART_TYPES.READY_STOCK;
+
+  const quoteResult = await quote(existingItems, shippingFee, discountAmount, {
+    cartType,
+    voucherCode
+  });
+
+  const nextOrderType = inferOrderType(quoteResult.items);
+  if (nextOrderType !== order.orderType) {
+    throw new AppError('Order type mismatch. Pre-order and ready-stock items must stay separated', 400);
+  }
+
+  order.items = quoteResult.items;
+  order.subtotal = quoteResult.subtotal;
+  order.shippingFee = quoteResult.shippingFee;
+  order.discountAmount = quoteResult.discountAmount;
+  order.total = quoteResult.total;
+  order.payNowTotal = quoteResult.payNow;
+  order.payLaterTotal = quoteResult.payLater;
+  order.voucherCode = quoteResult.voucherCode || '';
+
+  const paidAmount = Number(order.paidAmount || 0);
+  if (paidAmount <= 0) {
+    order.paymentStatus = quoteResult.payNow > 0 ? 'pending' : 'paid';
+    if (order.paymentStatus === 'paid' && !order.paidAt) {
+      order.paidAt = new Date();
+      order.editWindowEndsAt = addHours(order.paidAt, Number(order.confirmationDeadlineHours || 12));
+    }
+  } else if (paidAmount >= Number(order.payNowTotal || 0)) {
+    order.paymentStatus = 'paid';
+    if (!order.paidAt) {
+      order.paidAt = new Date();
+    }
+    if (!order.editWindowEndsAt) {
+      order.editWindowEndsAt = addHours(order.paidAt, Number(order.confirmationDeadlineHours || 12));
+    }
+  } else {
+    order.paymentStatus = 'partial';
+  }
+
+  if (!staff) {
+    order.lastCustomerEditAt = new Date();
+    order.customerEditCount = Number(order.customerEditCount || 0) + 1;
+  }
+
+  const invoice = await ensureOrderInvoice(order);
+  syncInvoiceByOrderState(invoice, order);
+
+  await Promise.all([order.save(), invoice.save()]);
+
+  const updatedOrder = await Order.findById(order._id).populate(ORDER_POPULATE);
+  const updatedItems = Array.isArray(updatedOrder?.items) ? updatedOrder.items : [];
+  const updatedItem = updatedItems[targetIndex] || null;
+
+  return {
+    order: updatedOrder,
+    updatedItem,
+    updatedItemIndex: targetIndex
+  };
 }
 
 async function cancelOrder(id, currentUser, payload = {}) {
@@ -930,6 +1126,7 @@ module.exports = {
   markPaidBySepay,
   getOrderById,
   updateOrderItems,
+  patchOrderItem,
   cancelOrder,
   updateRefundStatus,
   updateOrderStatus,
