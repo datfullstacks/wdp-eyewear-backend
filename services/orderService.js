@@ -1086,8 +1086,10 @@ async function listOrders(currentUser, options = {}) {
   const skip = (page - 1) * limit;
   const query = {};
 
-  if (isStaff(currentUser) && options.userId) {
-    query.userId = options.userId;
+  if (isStaff(currentUser)) {
+    if (options.userId) {
+      query.userId = options.userId;
+    }
   } else {
     query.userId = currentUser.id;
   }
