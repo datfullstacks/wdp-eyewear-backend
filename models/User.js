@@ -29,13 +29,23 @@ const addressSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
+    wardCode: {
+        type: String,
+        default: ''
+    },
     district: {
         type: String,
         required: true
     },
+    districtId: {
+        type: Number
+    },
     province: {
         type: String,
         required: true
+    },
+    provinceId: {
+        type: Number
     },
     country: {
         type: String,
@@ -141,6 +151,37 @@ const notificationSchema = new mongoose.Schema({
     }
 }, { _id: true, timestamps: true });
 
+const pushTokenSchema = new mongoose.Schema({
+    token: {
+        type: String,
+        required: true
+    },
+    platform: {
+        type: String,
+        default: ''
+    },
+    deviceName: {
+        type: String,
+        default: ''
+    },
+    deviceModel: {
+        type: String,
+        default: ''
+    },
+    appOwnership: {
+        type: String,
+        default: ''
+    },
+    projectId: {
+        type: String,
+        default: ''
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now
+    }
+}, { _id: true });
+
 const refundAccountSchema = new mongoose.Schema({
     bankName: {
         type: String,
@@ -225,6 +266,10 @@ const userSchema = new mongoose.Schema({
     },
     notifications: {
         type: [notificationSchema],
+        default: []
+    },
+    pushTokens: {
+        type: [pushTokenSchema],
         default: []
     },
     refundAccount: {

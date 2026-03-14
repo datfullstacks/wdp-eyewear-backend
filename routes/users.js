@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const {
+  createUser,
   getAllUsers,
   getUserById,
   updateUser,
@@ -29,14 +30,24 @@ const {
   setDefaultMyPrescription,
   getMyNotifications,
   markMyNotificationAsRead,
-  markAllMyNotificationsAsRead
+  markAllMyNotificationsAsRead,
+  registerMyPushToken,
+  unregisterMyPushToken
 } = require('../controllers/userController');
 const { protect, authorize } = require('../middlewares/auth');
-
-const CUSTOMER_READONLY_ROLES = new Set(['sales', 'operations']);
+const { validate } = require('../middlewares/validator');
+const {
+  createUserRules,
+  updateUserRules,
+  validateId
+} = require('../validators/userValidator');
+const {
+  CUSTOMER_READONLY_ROLES,
+  getRole
+} = require('../helpers/roles');
 
 const authorizeUsersListRead = (req, res, next) => {
-  const role = String(req.user?.role || '').trim().toLowerCase();
+  const role = getRole(req.user);
 
   if (role === 'admin' || role === 'manager') {
     return next();
@@ -101,6 +112,16 @@ router.put('/me/prescriptions/:prescriptionId/default', setDefaultMyPrescription
 router.get('/me/notifications', getMyNotifications);
 router.put('/me/notifications/read-all', markAllMyNotificationsAsRead);
 router.put('/me/notifications/:notificationId/read', markMyNotificationAsRead);
+router.post('/me/push-tokens', registerMyPushToken);
+router.delete('/me/push-tokens', unregisterMyPushToken);
+
+router.post(
+  '/',
+  authorize('admin', 'manager'),
+  createUserRules,
+  validate,
+  createUser
+);
 
 /**
  * @swagger
@@ -158,7 +179,7 @@ router.get('/', authorizeUsersListRead, getAllUsers);
  *       404:
  *         description: User not found
  */
-router.get('/:id', getUserById);
+router.get('/:id', validateId, validate, getUserById);
 
 /**
  * @swagger
@@ -192,7 +213,14 @@ router.get('/:id', getUserById);
  *       403:
  *         description: Forbidden
  */
-router.put('/:id', authorize('admin', 'manager'), updateUser);
+router.put(
+  '/:id',
+  authorize('admin', 'manager'),
+  validateId,
+  updateUserRules,
+  validate,
+  updateUser
+);
 
 /**
  * @swagger
@@ -214,6 +242,6 @@ router.put('/:id', authorize('admin', 'manager'), updateUser);
  *       403:
  *         description: Forbidden - Admin only
  */
-router.delete('/:id', authorize('admin'), deleteUser);
+router.delete('/:id', authorize('admin', 'manager'), validateId, validate, deleteUser);
 
 module.exports = router;

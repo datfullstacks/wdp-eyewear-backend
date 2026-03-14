@@ -96,7 +96,7 @@ router.post('/:id/replies', validateId, validate, supportController.replyTicket)
  */
 router.put(
   '/:id/status',
-  authorize('admin', 'manager', 'operations', 'sales'),
+  authorize('manager', 'operations', 'sales'),
   validateId,
   validate,
   supportController.updateTicketStatus

@@ -37,6 +37,15 @@ const shippingRules = [
   body(['shippingAddress.fullName', 'shipping_address.fullName']).optional().isString(),
   body(['shippingAddress.phone', 'shipping_address.phone']).optional().isString(),
   body(['shippingAddress.line1', 'shipping_address.line1']).optional().isString(),
+  body(['shippingAddress.line2', 'shipping_address.line2']).optional().isString(),
+  body(['shippingAddress.ward', 'shipping_address.ward']).optional().isString(),
+  body(['shippingAddress.wardCode', 'shipping_address.wardCode', 'shippingAddress.ward_code', 'shipping_address.ward_code']).optional().isString(),
+  body(['shippingAddress.district', 'shipping_address.district']).optional().isString(),
+  body(['shippingAddress.districtId', 'shipping_address.districtId', 'shippingAddress.district_id', 'shipping_address.district_id']).optional().isInt({ min: 1 }),
+  body(['shippingAddress.province', 'shipping_address.province']).optional().isString(),
+  body(['shippingAddress.provinceId', 'shipping_address.provinceId', 'shippingAddress.province_id', 'shipping_address.province_id']).optional().isInt({ min: 1 }),
+  body(['shippingAddress.country', 'shipping_address.country']).optional().isString(),
+  body(['shippingAddress.note', 'shipping_address.note']).optional().isString().isLength({ max: 500 }),
   body(['cartType', 'cart_type'])
     .optional()
     .isIn(['ready_stock', 'pre_order'])

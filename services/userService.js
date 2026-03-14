@@ -2,9 +2,48 @@ const User = require('../models/User');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const Invoice = require('../models/Invoice');
+const bcrypt = require('bcryptjs');
 const AppError = require('../errors/AppError');
+const { isExpoPushToken } = require('../helpers/expoPush');
+const { emitNotificationEvent } = require('../realtime/websocket');
+const {
+  ROLE,
+  normalizeRole,
+  canManageUserRole,
+  canReadUserRecord,
+  canDeleteUser
+} = require('../helpers/roles');
 
 class UserService {
+  normalizePushTokenInput(input = {}) {
+    const token = String(input?.token ?? '').trim();
+    if (!token) {
+      throw new AppError('token is required', 400);
+    }
+
+    if (!isExpoPushToken(token)) {
+      throw new AppError('Invalid Expo push token', 400);
+    }
+
+    return {
+      token,
+      platform: String(input?.platform ?? '').trim().toLowerCase(),
+      deviceName: String(input?.deviceName ?? '').trim(),
+      deviceModel: String(input?.deviceModel ?? '').trim(),
+      appOwnership: String(input?.appOwnership ?? '').trim(),
+      projectId: String(input?.projectId ?? '').trim(),
+      updatedAt: new Date(),
+    };
+  }
+
+  normalizePositiveInteger(value, fieldName) {
+    const normalized = Number(value);
+    if (!Number.isInteger(normalized) || normalized < 1) {
+      throw new AppError(`${fieldName} must be a positive integer`, 400);
+    }
+    return normalized;
+  }
+
   normalizeAddressInput(addressData = {}, { partial = false } = {}) {
     const payload = {};
     const fields = [
@@ -30,6 +69,21 @@ class UserService {
       payload.isDefault = Boolean(addressData.isDefault);
     }
 
+    const provinceId = addressData.provinceId ?? addressData.province_id;
+    if (provinceId !== undefined) {
+      payload.provinceId = this.normalizePositiveInteger(provinceId, 'provinceId');
+    }
+
+    const districtId = addressData.districtId ?? addressData.district_id;
+    if (districtId !== undefined) {
+      payload.districtId = this.normalizePositiveInteger(districtId, 'districtId');
+    }
+
+    const wardCode = addressData.wardCode ?? addressData.ward_code;
+    if (wardCode !== undefined) {
+      payload.wardCode = String(wardCode ?? '').trim();
+    }
+
     if (!partial) {
       const requiredFields = ['fullName', 'phone', 'line1', 'district', 'province'];
       for (const field of requiredFields) {
@@ -49,6 +103,10 @@ class UserService {
 
     if (payload.country === '') {
       payload.country = 'VN';
+    }
+
+    if (payload.wardCode === '') {
+      payload.wardCode = '';
     }
 
     return payload;
@@ -475,6 +533,15 @@ class UserService {
     if (!item.readAt) item.readAt = new Date();
     user.notifications = notifications;
     await user.save();
+    emitNotificationEvent({
+      action: 'read',
+      notification: item.toObject ? item.toObject() : item,
+      notificationIds: [String(item._id)],
+      readAt: item.readAt,
+      recipients: {
+        userIds: [String(userId)],
+      },
+    });
     return user.notifications;
   }
 
@@ -488,7 +555,94 @@ class UserService {
     });
     user.notifications = notifications;
     await user.save();
+    emitNotificationEvent({
+      action: 'read_all',
+      notificationIds: notifications.map((n) => String(n._id)),
+      readAt: now,
+      recipients: {
+        userIds: [String(userId)],
+      },
+    });
     return user.notifications;
+  }
+
+  async registerMyPushToken(userId, input = {}) {
+    const payload = this.normalizePushTokenInput(input);
+    const user = await User.findById(userId).select('pushTokens');
+    if (!user) {
+      throw new AppError('User not found', 404);
+    }
+
+    await User.updateMany(
+      { _id: { $ne: userId } },
+      {
+        $pull: {
+          pushTokens: {
+            token: payload.token,
+          },
+        },
+      },
+    );
+
+    const pushTokens = Array.isArray(user.pushTokens) ? user.pushTokens : [];
+    const existingIndex = pushTokens.findIndex(
+      (item) => String(item?.token || '') === payload.token,
+    );
+
+    if (existingIndex >= 0) {
+      Object.assign(pushTokens[existingIndex], payload);
+    } else {
+      pushTokens.push(payload);
+    }
+
+    user.pushTokens = pushTokens;
+    await user.save();
+    return user.pushTokens;
+  }
+
+  async unregisterMyPushToken(userId, tokenValue) {
+    const token = String(tokenValue ?? '').trim();
+    if (!token) {
+      throw new AppError('token is required', 400);
+    }
+
+    const user = await User.findById(userId).select('pushTokens');
+    if (!user) {
+      throw new AppError('User not found', 404);
+    }
+
+    user.pushTokens = (Array.isArray(user.pushTokens) ? user.pushTokens : []).filter(
+      (item) => String(item?.token || '') !== token,
+    );
+    await user.save();
+    return user.pushTokens;
+  }
+
+  async createUser(userData, currentUser) {
+    const { name, email, password, role } = userData;
+    const normalizedRole = normalizeRole(role);
+
+    if (!canManageUserRole(currentUser, normalizedRole)) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      throw new AppError('Email already in use', 400);
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const user = await User.create({
+      name: String(name || '').trim(),
+      email: String(email || '').trim().toLowerCase(),
+      password: hashedPassword,
+      provider: 'local',
+      role: normalizedRole || ROLE.CUSTOMER
+    });
+
+    return User.findById(user._id).select('-password');
   }
 
   // Get all users with pagination
@@ -525,41 +679,68 @@ class UserService {
   }
 
   // Get user by ID
-  async getUserById(userId) {
+  async getUserById(userId, currentUser) {
     const user = await User.findById(userId).select('-password');
     if (!user) {
       throw new AppError('User not found', 404);
     }
+
+    if (!canReadUserRecord(currentUser, user)) {
+      throw new AppError('Forbidden', 403);
+    }
+
     return user;
   }
 
   // Update user
-  async updateUser(userId, updateData) {
+  async updateUser(userId, updateData, currentUser) {
     const { name, email, role } = updateData;
+    const existingUser = await User.findById(userId).select('-password');
+    if (!existingUser) {
+      throw new AppError('User not found', 404);
+    }
+
+    const nextRole = role === undefined ? existingUser.role : normalizeRole(role);
+    if (!canManageUserRole(currentUser, nextRole) || !canReadUserRecord(currentUser, existingUser)) {
+      throw new AppError('Forbidden', 403);
+    }
 
     // Check if email is being changed and if it's already taken
     if (email) {
-      const existingUser = await User.findOne({ email, _id: { $ne: userId } });
-      if (existingUser) {
+      const duplicateUser = await User.findOne({ email, _id: { $ne: userId } });
+      if (duplicateUser) {
         throw new AppError('Email already in use', 400);
       }
     }
 
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { name, email, role },
-      { new: true, runValidators: true }
-    ).select('-password');
+    const updatePayload = {};
+    if (name !== undefined) updatePayload.name = name;
+    if (email !== undefined) updatePayload.email = email;
+    if (role !== undefined) updatePayload.role = nextRole;
 
-    if (!user) {
-      throw new AppError('User not found', 404);
+    if (!Object.keys(updatePayload).length) {
+      throw new AppError('No user fields to update', 400);
     }
+
+    const user = await User.findByIdAndUpdate(userId, updatePayload, {
+      new: true,
+      runValidators: true
+    }).select('-password');
 
     return user;
   }
 
   // Delete user
-  async deleteUser(userId) {
+  async deleteUser(userId, currentUser) {
+    const targetUser = await User.findById(userId).select('-password');
+    if (!targetUser) {
+      throw new AppError('User not found', 404);
+    }
+
+    if (!canDeleteUser(currentUser, targetUser)) {
+      throw new AppError('Forbidden', 403);
+    }
+
     const [orderCount, invoiceCount] = await Promise.all([
       Order.countDocuments({ userId }),
       Invoice.countDocuments({ userId })
@@ -572,11 +753,8 @@ class UserService {
       );
     }
 
-    const user = await User.findByIdAndDelete(userId);
-    if (!user) {
-      throw new AppError('User not found', 404);
-    }
-    return user;
+    await User.findByIdAndDelete(userId);
+    return targetUser;
   }
 
   // Change password
@@ -587,7 +765,6 @@ class UserService {
     }
 
     // Verify current password
-    const bcrypt = require('bcryptjs');
     const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
     if (!isPasswordValid) {
       throw new AppError('Current password is incorrect', 400);

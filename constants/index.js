@@ -18,6 +18,36 @@ const ORDER_STATUS = {
   RETURNED: 'returned'
 };
 
+const ORDER_OPS_STAGE = {
+  NONE: 'none',
+  PENDING_OPERATIONS: 'pending_operations',
+  PICKING: 'picking',
+  WAITING_CUSTOMER_INFO: 'waiting_customer_info',
+  ON_HOLD: 'on_hold',
+  WAITING_ARRIVAL: 'waiting_arrival',
+  ARRIVED: 'arrived',
+  STOCKED: 'stocked',
+  READY_TO_PACK: 'ready_to_pack',
+  WAITING_LAB: 'waiting_lab',
+  LENS_PROCESSING: 'lens_processing',
+  LENS_FITTING: 'lens_fitting',
+  QC_CHECK: 'qc_check',
+  PACKING: 'packing',
+  READY_TO_SHIP: 'ready_to_ship',
+  SHIPMENT_CREATED: 'shipment_created',
+  HANDOVER_TO_CARRIER: 'handover_to_carrier',
+  IN_TRANSIT: 'in_transit',
+  DELIVERY_FAILED: 'delivery_failed',
+  WAITING_REDELIVERY: 'waiting_redelivery',
+  RETURN_PENDING: 'return_pending',
+  RETURN_IN_TRANSIT: 'return_in_transit',
+  EXCEPTION_HOLD: 'exception_hold',
+  DELIVERED: 'delivered',
+  CLOSED: 'closed',
+  RETURNED: 'returned',
+  CANCELLED: 'cancelled'
+};
+
 // Order types
 const ORDER_TYPES = {
   READY_STOCK: 'ready_stock',      // K?nh c? s?n
@@ -122,6 +152,7 @@ const ACCESSORY_CATEGORIES = [
 module.exports = {
   USER_ROLES,
   ORDER_STATUS,
+  ORDER_OPS_STAGE,
   ORDER_TYPES,
   PAYMENT_STATUS,
   PAYMENT_METHODS,

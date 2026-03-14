@@ -1,10 +1,9 @@
 const Invoice = require('../models/Invoice');
 const AppError = require('../errors/AppError');
-
-const STAFF_ROLES = new Set(['admin', 'manager', 'operations', 'sales']);
+const { isBusinessUser } = require('../helpers/roles');
 
 function isStaff(user) {
-  return Boolean(user && STAFF_ROLES.has(user.role));
+  return isBusinessUser(user);
 }
 
 async function getInvoiceById(invoiceId, currentUser) {

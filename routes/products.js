@@ -364,7 +364,7 @@ router.use(protect);
  */
 router.post(
     '/', 
-    authorize('admin', 'manager', 'operations'), 
+    authorize('manager', 'operations'), 
     createProductRules, 
     validate, 
     productController.createProduct
@@ -397,7 +397,7 @@ router.post(
  */
 router.put(
     '/:id', 
-    authorize('admin', 'manager', 'operations'), 
+    authorize('manager', 'operations'), 
     validateId, 
     updateProductRules, 
     validate, 
@@ -425,7 +425,7 @@ router.put(
  */
 router.delete(
     '/:id', 
-    authorize('admin', 'manager', 'operations'),
+    authorize('manager', 'operations'),
     validateId, 
     validate, 
     productController.deleteProduct
