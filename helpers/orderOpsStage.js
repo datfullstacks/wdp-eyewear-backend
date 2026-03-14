@@ -1,0 +1,437 @@
+const { ORDER_OPS_STAGE, ORDER_STATUS, ORDER_TYPES } = require("../constants");
+
+const SHARED_FULFILLMENT_STAGES = [
+  ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+  ORDER_OPS_STAGE.ON_HOLD,
+  ORDER_OPS_STAGE.PACKING,
+  ORDER_OPS_STAGE.READY_TO_SHIP,
+  ORDER_OPS_STAGE.SHIPMENT_CREATED,
+  ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+  ORDER_OPS_STAGE.IN_TRANSIT,
+  ORDER_OPS_STAGE.DELIVERY_FAILED,
+  ORDER_OPS_STAGE.WAITING_REDELIVERY,
+  ORDER_OPS_STAGE.RETURN_PENDING,
+  ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+  ORDER_OPS_STAGE.EXCEPTION_HOLD,
+  ORDER_OPS_STAGE.DELIVERED,
+  ORDER_OPS_STAGE.CLOSED,
+  ORDER_OPS_STAGE.RETURNED,
+  ORDER_OPS_STAGE.CANCELLED,
+];
+
+const ALLOWED_STAGES_BY_TYPE = Object.freeze({
+  [ORDER_TYPES.READY_STOCK]: [
+    ORDER_OPS_STAGE.NONE,
+    ORDER_OPS_STAGE.PENDING_OPERATIONS,
+    ORDER_OPS_STAGE.PICKING,
+    ...SHARED_FULFILLMENT_STAGES,
+  ],
+  [ORDER_TYPES.PRE_ORDER]: [
+    ORDER_OPS_STAGE.NONE,
+    ORDER_OPS_STAGE.WAITING_ARRIVAL,
+    ORDER_OPS_STAGE.ARRIVED,
+    ORDER_OPS_STAGE.STOCKED,
+    ORDER_OPS_STAGE.READY_TO_PACK,
+    ...SHARED_FULFILLMENT_STAGES,
+  ],
+  [ORDER_TYPES.PRESCRIPTION]: [
+    ORDER_OPS_STAGE.NONE,
+    ORDER_OPS_STAGE.WAITING_LAB,
+    ORDER_OPS_STAGE.LENS_PROCESSING,
+    ORDER_OPS_STAGE.LENS_FITTING,
+    ORDER_OPS_STAGE.QC_CHECK,
+    ORDER_OPS_STAGE.READY_TO_PACK,
+    ...SHARED_FULFILLMENT_STAGES,
+  ],
+});
+
+const COMMON_TRANSITIONS = Object.freeze({
+  [ORDER_OPS_STAGE.NONE]: [],
+  [ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO]: [
+    ORDER_OPS_STAGE.PENDING_OPERATIONS,
+    ORDER_OPS_STAGE.WAITING_ARRIVAL,
+    ORDER_OPS_STAGE.WAITING_LAB,
+    ORDER_OPS_STAGE.ON_HOLD,
+  ],
+  [ORDER_OPS_STAGE.ON_HOLD]: [
+    ORDER_OPS_STAGE.PENDING_OPERATIONS,
+    ORDER_OPS_STAGE.PICKING,
+    ORDER_OPS_STAGE.WAITING_ARRIVAL,
+    ORDER_OPS_STAGE.WAITING_LAB,
+    ORDER_OPS_STAGE.PACKING,
+    ORDER_OPS_STAGE.READY_TO_SHIP,
+    ORDER_OPS_STAGE.READY_TO_PACK,
+    ORDER_OPS_STAGE.STOCKED,
+    ORDER_OPS_STAGE.ARRIVED,
+    ORDER_OPS_STAGE.LENS_PROCESSING,
+    ORDER_OPS_STAGE.LENS_FITTING,
+    ORDER_OPS_STAGE.QC_CHECK,
+    ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+    ORDER_OPS_STAGE.SHIPMENT_CREATED,
+    ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+    ORDER_OPS_STAGE.IN_TRANSIT,
+    ORDER_OPS_STAGE.DELIVERY_FAILED,
+    ORDER_OPS_STAGE.WAITING_REDELIVERY,
+    ORDER_OPS_STAGE.RETURN_PENDING,
+    ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+  ],
+  [ORDER_OPS_STAGE.PACKING]: [
+    ORDER_OPS_STAGE.READY_TO_SHIP,
+    ORDER_OPS_STAGE.SHIPMENT_CREATED,
+    ORDER_OPS_STAGE.ON_HOLD,
+    ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+  ],
+  [ORDER_OPS_STAGE.READY_TO_SHIP]: [
+    ORDER_OPS_STAGE.SHIPMENT_CREATED,
+    ORDER_OPS_STAGE.ON_HOLD,
+    ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+  ],
+  [ORDER_OPS_STAGE.SHIPMENT_CREATED]: [
+    ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+    ORDER_OPS_STAGE.ON_HOLD,
+  ],
+  [ORDER_OPS_STAGE.HANDOVER_TO_CARRIER]: [
+    ORDER_OPS_STAGE.IN_TRANSIT,
+    ORDER_OPS_STAGE.DELIVERY_FAILED,
+    ORDER_OPS_STAGE.WAITING_REDELIVERY,
+    ORDER_OPS_STAGE.RETURN_PENDING,
+    ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+    ORDER_OPS_STAGE.RETURNED,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+    ORDER_OPS_STAGE.ON_HOLD,
+  ],
+  [ORDER_OPS_STAGE.IN_TRANSIT]: [
+    ORDER_OPS_STAGE.DELIVERED,
+    ORDER_OPS_STAGE.DELIVERY_FAILED,
+    ORDER_OPS_STAGE.WAITING_REDELIVERY,
+    ORDER_OPS_STAGE.RETURN_PENDING,
+    ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+    ORDER_OPS_STAGE.RETURNED,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+  ],
+  [ORDER_OPS_STAGE.DELIVERY_FAILED]: [
+    ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+    ORDER_OPS_STAGE.IN_TRANSIT,
+    ORDER_OPS_STAGE.WAITING_REDELIVERY,
+    ORDER_OPS_STAGE.RETURN_PENDING,
+    ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+    ORDER_OPS_STAGE.RETURNED,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+    ORDER_OPS_STAGE.SHIPMENT_CREATED,
+    ORDER_OPS_STAGE.ON_HOLD,
+  ],
+  [ORDER_OPS_STAGE.WAITING_REDELIVERY]: [
+    ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+    ORDER_OPS_STAGE.IN_TRANSIT,
+    ORDER_OPS_STAGE.RETURN_PENDING,
+    ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+    ORDER_OPS_STAGE.RETURNED,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+    ORDER_OPS_STAGE.ON_HOLD,
+  ],
+  [ORDER_OPS_STAGE.RETURN_PENDING]: [
+    ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+    ORDER_OPS_STAGE.RETURNED,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+  ],
+  [ORDER_OPS_STAGE.RETURN_IN_TRANSIT]: [
+    ORDER_OPS_STAGE.RETURNED,
+    ORDER_OPS_STAGE.EXCEPTION_HOLD,
+  ],
+  [ORDER_OPS_STAGE.EXCEPTION_HOLD]: [
+    ORDER_OPS_STAGE.SHIPMENT_CREATED,
+    ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+    ORDER_OPS_STAGE.IN_TRANSIT,
+    ORDER_OPS_STAGE.DELIVERY_FAILED,
+    ORDER_OPS_STAGE.WAITING_REDELIVERY,
+    ORDER_OPS_STAGE.RETURN_PENDING,
+    ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+    ORDER_OPS_STAGE.ON_HOLD,
+  ],
+  [ORDER_OPS_STAGE.DELIVERED]: [ORDER_OPS_STAGE.CLOSED],
+  [ORDER_OPS_STAGE.CLOSED]: [],
+  [ORDER_OPS_STAGE.RETURNED]: [ORDER_OPS_STAGE.CLOSED],
+  [ORDER_OPS_STAGE.CANCELLED]: [],
+});
+
+const TRANSITIONS_BY_TYPE = Object.freeze({
+  [ORDER_TYPES.READY_STOCK]: {
+    ...COMMON_TRANSITIONS,
+    [ORDER_OPS_STAGE.NONE]: [ORDER_OPS_STAGE.PENDING_OPERATIONS],
+    [ORDER_OPS_STAGE.PENDING_OPERATIONS]: [
+      ORDER_OPS_STAGE.PICKING,
+      ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.PICKING]: [
+      ORDER_OPS_STAGE.PACKING,
+      ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+  },
+  [ORDER_TYPES.PRE_ORDER]: {
+    ...COMMON_TRANSITIONS,
+    [ORDER_OPS_STAGE.NONE]: [ORDER_OPS_STAGE.WAITING_ARRIVAL],
+    [ORDER_OPS_STAGE.WAITING_ARRIVAL]: [
+      ORDER_OPS_STAGE.ARRIVED,
+      ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.ARRIVED]: [
+      ORDER_OPS_STAGE.STOCKED,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.STOCKED]: [
+      ORDER_OPS_STAGE.READY_TO_PACK,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.READY_TO_PACK]: [
+      ORDER_OPS_STAGE.PACKING,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+  },
+  [ORDER_TYPES.PRESCRIPTION]: {
+    ...COMMON_TRANSITIONS,
+    [ORDER_OPS_STAGE.NONE]: [ORDER_OPS_STAGE.WAITING_LAB],
+    [ORDER_OPS_STAGE.WAITING_LAB]: [
+      ORDER_OPS_STAGE.LENS_PROCESSING,
+      ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.LENS_PROCESSING]: [
+      ORDER_OPS_STAGE.LENS_FITTING,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.LENS_FITTING]: [
+      ORDER_OPS_STAGE.QC_CHECK,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.QC_CHECK]: [
+      ORDER_OPS_STAGE.READY_TO_PACK,
+      ORDER_OPS_STAGE.LENS_PROCESSING,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+    [ORDER_OPS_STAGE.READY_TO_PACK]: [
+      ORDER_OPS_STAGE.PACKING,
+      ORDER_OPS_STAGE.ON_HOLD,
+    ],
+  },
+});
+
+const INITIAL_STAGE_BY_TYPE = Object.freeze({
+  [ORDER_TYPES.READY_STOCK]: ORDER_OPS_STAGE.PENDING_OPERATIONS,
+  [ORDER_TYPES.PRE_ORDER]: ORDER_OPS_STAGE.WAITING_ARRIVAL,
+  [ORDER_TYPES.PRESCRIPTION]: ORDER_OPS_STAGE.WAITING_LAB,
+});
+
+const DEFAULT_PROCESSING_STAGE_BY_TYPE = Object.freeze({
+  [ORDER_TYPES.READY_STOCK]: ORDER_OPS_STAGE.PICKING,
+  [ORDER_TYPES.PRE_ORDER]: ORDER_OPS_STAGE.STOCKED,
+  [ORDER_TYPES.PRESCRIPTION]: ORDER_OPS_STAGE.LENS_PROCESSING,
+});
+
+const ORDER_STATUS_BY_STAGE = Object.freeze({
+  [ORDER_OPS_STAGE.NONE]: ORDER_STATUS.PENDING,
+  [ORDER_OPS_STAGE.PENDING_OPERATIONS]: ORDER_STATUS.CONFIRMED,
+  [ORDER_OPS_STAGE.PICKING]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.WAITING_ARRIVAL]: ORDER_STATUS.CONFIRMED,
+  [ORDER_OPS_STAGE.WAITING_LAB]: ORDER_STATUS.CONFIRMED,
+  [ORDER_OPS_STAGE.WAITING_CUSTOMER_INFO]: ORDER_STATUS.CONFIRMED,
+  [ORDER_OPS_STAGE.ON_HOLD]: ORDER_STATUS.CONFIRMED,
+  [ORDER_OPS_STAGE.ARRIVED]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.STOCKED]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.READY_TO_PACK]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.LENS_PROCESSING]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.LENS_FITTING]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.QC_CHECK]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.PACKING]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.READY_TO_SHIP]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.SHIPMENT_CREATED]: ORDER_STATUS.PROCESSING,
+  [ORDER_OPS_STAGE.HANDOVER_TO_CARRIER]: ORDER_STATUS.SHIPPED,
+  [ORDER_OPS_STAGE.IN_TRANSIT]: ORDER_STATUS.SHIPPED,
+  [ORDER_OPS_STAGE.DELIVERY_FAILED]: ORDER_STATUS.SHIPPED,
+  [ORDER_OPS_STAGE.WAITING_REDELIVERY]: ORDER_STATUS.SHIPPED,
+  [ORDER_OPS_STAGE.RETURN_PENDING]: ORDER_STATUS.SHIPPED,
+  [ORDER_OPS_STAGE.RETURN_IN_TRANSIT]: ORDER_STATUS.SHIPPED,
+  [ORDER_OPS_STAGE.EXCEPTION_HOLD]: ORDER_STATUS.SHIPPED,
+  [ORDER_OPS_STAGE.DELIVERED]: ORDER_STATUS.DELIVERED,
+  [ORDER_OPS_STAGE.CLOSED]: ORDER_STATUS.DELIVERED,
+  [ORDER_OPS_STAGE.RETURNED]: ORDER_STATUS.RETURNED,
+  [ORDER_OPS_STAGE.CANCELLED]: ORDER_STATUS.CANCELLED,
+});
+
+function normalizeOrderType(orderType) {
+  const normalized = String(orderType || "").trim().toLowerCase();
+  if (Object.values(ORDER_TYPES).includes(normalized)) {
+    return normalized;
+  }
+
+  return ORDER_TYPES.READY_STOCK;
+}
+
+function normalizeOpsStage(stage, fallback = ORDER_OPS_STAGE.NONE) {
+  const normalized = String(stage || "").trim().toLowerCase();
+  if (Object.values(ORDER_OPS_STAGE).includes(normalized)) {
+    return normalized;
+  }
+
+  return fallback;
+}
+
+function getAllowedOpsStages(orderType) {
+  const normalizedType = normalizeOrderType(orderType);
+  return [...(ALLOWED_STAGES_BY_TYPE[normalizedType] || [])];
+}
+
+function getInitialOpsStage(orderType) {
+  const normalizedType = normalizeOrderType(orderType);
+  return INITIAL_STAGE_BY_TYPE[normalizedType] || ORDER_OPS_STAGE.PENDING_OPERATIONS;
+}
+
+function isOpsStageAllowedForOrderType(orderType, stage) {
+  const normalizedStage = normalizeOpsStage(stage, "");
+  return getAllowedOpsStages(orderType).includes(normalizedStage);
+}
+
+function getAllowedNextOpsStages(orderType, currentStage) {
+  const normalizedType = normalizeOrderType(orderType);
+  const normalizedCurrentStage = normalizeOpsStage(currentStage);
+  const transitions = TRANSITIONS_BY_TYPE[normalizedType] || {};
+  return [...(transitions[normalizedCurrentStage] || [])];
+}
+
+function canTransitionOpsStage(orderType, currentStage, nextStage) {
+  const normalizedNextStage = normalizeOpsStage(nextStage, "");
+  if (!normalizedNextStage) return false;
+
+  if (!isOpsStageAllowedForOrderType(orderType, normalizedNextStage)) {
+    return false;
+  }
+
+  const normalizedCurrentStage = normalizeOpsStage(currentStage);
+  if (normalizedCurrentStage === normalizedNextStage) {
+    return true;
+  }
+
+  return getAllowedNextOpsStages(orderType, normalizedCurrentStage).includes(
+    normalizedNextStage,
+  );
+}
+
+function getOrderStatusForOpsStage(stage, fallback = null) {
+  const normalizedStage = normalizeOpsStage(stage, "");
+  return ORDER_STATUS_BY_STAGE[normalizedStage] || fallback;
+}
+
+function deriveOpsStageFromOrderStatus(orderType, orderStatus, currentStage) {
+  const normalizedStatus = String(orderStatus || "").trim().toLowerCase();
+  const normalizedCurrentStage = normalizeOpsStage(currentStage);
+
+  if (normalizedStatus === ORDER_STATUS.PENDING) {
+    return ORDER_OPS_STAGE.NONE;
+  }
+
+  if (normalizedStatus === ORDER_STATUS.CONFIRMED) {
+    return normalizedCurrentStage !== ORDER_OPS_STAGE.NONE
+      ? normalizedCurrentStage
+      : getInitialOpsStage(orderType);
+  }
+
+  if (normalizedStatus === ORDER_STATUS.PROCESSING) {
+    const normalizedType = normalizeOrderType(orderType);
+    if (
+      normalizedType === ORDER_TYPES.READY_STOCK &&
+      normalizedCurrentStage === ORDER_OPS_STAGE.PENDING_OPERATIONS
+    ) {
+      return ORDER_OPS_STAGE.PICKING;
+    }
+    if (normalizedCurrentStage !== ORDER_OPS_STAGE.NONE) {
+      return normalizedCurrentStage;
+    }
+    return (
+      DEFAULT_PROCESSING_STAGE_BY_TYPE[normalizedType] ||
+      ORDER_OPS_STAGE.PACKING
+    );
+  }
+
+  if (normalizedStatus === ORDER_STATUS.SHIPPED) {
+    if (
+      [
+        ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+        ORDER_OPS_STAGE.IN_TRANSIT,
+        ORDER_OPS_STAGE.DELIVERY_FAILED,
+        ORDER_OPS_STAGE.WAITING_REDELIVERY,
+        ORDER_OPS_STAGE.RETURN_PENDING,
+        ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+        ORDER_OPS_STAGE.EXCEPTION_HOLD,
+      ].includes(normalizedCurrentStage)
+    ) {
+      return normalizedCurrentStage;
+    }
+    return ORDER_OPS_STAGE.HANDOVER_TO_CARRIER;
+  }
+
+  if (normalizedStatus === ORDER_STATUS.DELIVERED) {
+    return normalizedCurrentStage === ORDER_OPS_STAGE.CLOSED
+      ? ORDER_OPS_STAGE.CLOSED
+      : ORDER_OPS_STAGE.DELIVERED;
+  }
+
+  if (normalizedStatus === ORDER_STATUS.RETURNED) {
+    return ORDER_OPS_STAGE.RETURNED;
+  }
+
+  if (normalizedStatus === ORDER_STATUS.CANCELLED) {
+    return ORDER_OPS_STAGE.CANCELLED;
+  }
+
+  return normalizedCurrentStage;
+}
+
+function syncOrderWithOpsStage(order, nextStage) {
+  const normalizedStage = normalizeOpsStage(nextStage);
+  order.opsStage = normalizedStage;
+  order.opsStageUpdatedAt = new Date();
+
+  const mappedOrderStatus = getOrderStatusForOpsStage(normalizedStage, null);
+  if (mappedOrderStatus) {
+    order.status = mappedOrderStatus;
+  }
+
+  if (
+    order.status === ORDER_STATUS.CONFIRMED &&
+    !order.confirmedAt &&
+    normalizedStage !== ORDER_OPS_STAGE.NONE
+  ) {
+    order.confirmedAt = new Date();
+  }
+
+  return order;
+}
+
+function syncOpsStageWithOrder(order) {
+  const nextStage = deriveOpsStageFromOrderStatus(
+    order?.orderType,
+    order?.status,
+    order?.opsStage,
+  );
+  order.opsStage = nextStage;
+  order.opsStageUpdatedAt = new Date();
+  return order;
+}
+
+module.exports = {
+  ORDER_OPS_STAGE,
+  normalizeOpsStage,
+  getAllowedOpsStages,
+  getAllowedNextOpsStages,
+  getInitialOpsStage,
+  isOpsStageAllowedForOrderType,
+  canTransitionOpsStage,
+  getOrderStatusForOpsStage,
+  deriveOpsStageFromOrderStatus,
+  syncOrderWithOpsStage,
+  syncOpsStageWithOrder,
+};

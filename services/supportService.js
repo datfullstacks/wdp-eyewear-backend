@@ -1,5 +1,7 @@
 const SupportTicket = require('../models/SupportTicket');
 const AppError = require('../errors/AppError');
+const { isBusinessUser } = require('../helpers/roles');
+const { publishStatusChange } = require('../helpers/statusEvents');
 
 class SupportService {
   normalizeCreatePayload(payload = {}) {
@@ -47,7 +49,7 @@ class SupportService {
     const skip = (page - 1) * limit;
     const query = {};
 
-    const isStaff = ['admin', 'manager', 'operations', 'sales'].includes(currentUser.role);
+    const isStaff = isBusinessUser(currentUser);
     if (isStaff && options.userId) {
       query.userId = options.userId;
     } else if (!isStaff) {
@@ -81,7 +83,7 @@ class SupportService {
     if (!ticket) throw new AppError('Support ticket not found', 404);
 
     const isOwner = String(ticket.userId) === String(currentUser.id);
-    const isStaff = ['admin', 'manager', 'operations', 'sales'].includes(currentUser.role);
+    const isStaff = isBusinessUser(currentUser);
     if (!isOwner && !isStaff) {
       throw new AppError('Forbidden', 403);
     }
@@ -94,7 +96,8 @@ class SupportService {
     const message = String(payload.message || '').trim();
     if (!message) throw new AppError('message is required', 400);
 
-    const isStaff = ['admin', 'manager', 'operations', 'sales'].includes(currentUser.role);
+    const isStaff = isBusinessUser(currentUser);
+    const previousStatus = ticket.status;
     ticket.messages.push({
       sender: isStaff ? 'staff' : 'user',
       message
@@ -108,11 +111,25 @@ class SupportService {
 
     ticket.lastMessageAt = new Date();
     await ticket.save();
+
+    publishStatusChange({
+      domain: 'support',
+      entityId: ticket._id,
+      previousStatus,
+      nextStatus: ticket.status,
+      currentUser,
+      recipientUserIds: [ticket.userId],
+      meta: {
+        category: ticket.category,
+        priority: ticket.priority,
+      },
+    });
+
     return ticket;
   }
 
   async updateStatus(id, currentUser, status) {
-    const isStaff = ['admin', 'manager', 'operations', 'sales'].includes(currentUser?.role);
+    const isStaff = isBusinessUser(currentUser);
     if (!isStaff) throw new AppError('Forbidden', 403);
 
     const normalized = String(status || '').trim().toLowerCase();
@@ -122,9 +139,24 @@ class SupportService {
 
     const ticket = await SupportTicket.findById(id);
     if (!ticket) throw new AppError('Support ticket not found', 404);
+    const previousStatus = ticket.status;
 
     ticket.status = normalized;
     await ticket.save();
+
+    publishStatusChange({
+      domain: 'support',
+      entityId: ticket._id,
+      previousStatus,
+      nextStatus: ticket.status,
+      currentUser,
+      recipientUserIds: [ticket.userId],
+      meta: {
+        category: ticket.category,
+        priority: ticket.priority,
+      },
+    });
+
     return ticket;
   }
 }

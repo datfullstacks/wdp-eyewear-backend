@@ -15,7 +15,7 @@ router.use(protect);
 
 router.get(
   '/batches',
-  authorize('admin', 'manager', 'operations', 'sales'),
+  authorize('manager', 'operations', 'sales'),
   listPreorderBatchRules,
   validate,
   preorderController.listBatches
@@ -23,7 +23,7 @@ router.get(
 
 router.get(
   '/batches/:id',
-  authorize('admin', 'manager', 'operations', 'sales'),
+  authorize('manager', 'operations', 'sales'),
   validateId,
   validate,
   preorderController.getBatchById
@@ -31,7 +31,7 @@ router.get(
 
 router.post(
   '/batches',
-  authorize('admin', 'manager', 'operations'),
+  authorize('manager', 'operations'),
   createPreorderBatchRules,
   validate,
   preorderController.createBatch
@@ -39,7 +39,7 @@ router.post(
 
 router.post(
   '/batches/:id/receive',
-  authorize('admin', 'manager', 'operations'),
+  authorize('manager', 'operations'),
   validateId,
   receivePreorderBatchRules,
   validate,
@@ -48,7 +48,7 @@ router.post(
 
 router.put(
   '/batches/:id/status',
-  authorize('admin', 'manager', 'operations'),
+  authorize('manager', 'operations'),
   validateId,
   updatePreorderBatchStatusRules,
   validate,

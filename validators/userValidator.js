@@ -1,5 +1,24 @@
 const { body, param, query } = require('express-validator');
 
+exports.createUserRules = [
+  body('name')
+    .trim()
+    .notEmpty()
+    .withMessage('Name is required'),
+  body('email')
+    .isEmail()
+    .withMessage('Please provide a valid email'),
+  body('password')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+  body('role')
+    .notEmpty()
+    .withMessage('Role is required')
+    .bail()
+    .isIn(['customer', 'sales', 'operations', 'manager', 'admin'])
+    .withMessage('Invalid role')
+];
+
 // User update validation
 exports.updateUserRules = [
   body('name')
