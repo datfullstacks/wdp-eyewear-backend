@@ -1,6 +1,7 @@
 const Product = require('../models/Product');
 const AppError = require('../errors/AppError');
 const { PREORDER_BATCH_STATUSES, PreorderBatch } = require('../models/PreorderBatch');
+const { publishStatusChange } = require('../helpers/statusEvents');
 
 const PREORDER_STATUS_SET = new Set(PREORDER_BATCH_STATUSES);
 
@@ -165,6 +166,7 @@ class PreorderService {
 
     const batch = await PreorderBatch.findById(batchId);
     if (!batch) throw new AppError('Preorder batch not found', 404);
+    const previousStatus = batch.status;
 
     if (batch.status === 'completed' && batch.items.every((item) => Number(item.pendingQty || 0) === 0)) {
       throw new AppError('Batch is already completed', 400);
@@ -234,10 +236,21 @@ class PreorderService {
     });
 
     await batch.save();
+    publishStatusChange({
+      domain: 'preorder_batch',
+      entityId: batch._id,
+      previousStatus,
+      nextStatus: batch.status,
+      currentUser,
+      meta: {
+        batchCode: batch.batchCode,
+        supplier: batch.supplier,
+      },
+    });
     return this.getBatchById(batch._id);
   }
 
-  async updateBatchStatus(batchId, status) {
+  async updateBatchStatus(batchId, status, currentUser = null) {
     const normalized = String(status || '').trim().toLowerCase();
     if (!PREORDER_STATUS_SET.has(normalized)) {
       throw new AppError('Invalid status', 400);
@@ -245,6 +258,7 @@ class PreorderService {
 
     const batch = await PreorderBatch.findById(batchId);
     if (!batch) throw new AppError('Preorder batch not found', 404);
+    const previousStatus = batch.status;
 
     if (normalized === 'completed' && batch.items.some((item) => Number(item.pendingQty || 0) > 0)) {
       throw new AppError('Cannot mark completed while pending quantity remains', 400);
@@ -256,6 +270,17 @@ class PreorderService {
 
     batch.status = normalized;
     await batch.save();
+    publishStatusChange({
+      domain: 'preorder_batch',
+      entityId: batch._id,
+      previousStatus,
+      nextStatus: batch.status,
+      currentUser,
+      meta: {
+        batchCode: batch.batchCode,
+        supplier: batch.supplier,
+      },
+    });
     return this.getBatchById(batch._id);
   }
 }

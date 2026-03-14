@@ -1,15 +1,18 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const orderController = require('../controllers/orderController');
-const { protect } = require('../middlewares/auth');
-const { validate, validateId } = require('../middlewares/validator');
+const orderController = require("../controllers/orderController");
+const { protect } = require("../middlewares/auth");
+const { validate, validateId } = require("../middlewares/validator");
 const {
   updateOrderItemsRules,
   patchOrderItemRules,
   cancelOrderRules,
   updateRefundStatusRules,
-  updateOrderStatusRules
-} = require('../validators/orderValidator');
+  updateOrderOpsStageRules,
+  updateOrderOpsExecutionRules,
+  updateOrderStatusRules,
+  updateShipmentTestStatusRules,
+} = require("../validators/orderValidator");
 
 /**
  * @swagger
@@ -53,7 +56,9 @@ const {
  *       200:
  *         description: Orders list
  */
-router.get('/', protect, orderController.listOrders);
+router.get("/", protect, orderController.listOrders);
+
+router.post("/shipping/ghn/webhook", orderController.ghnShippingWebhook);
 
 /**
  * @swagger
@@ -67,7 +72,7 @@ router.get('/', protect, orderController.listOrders);
  *       200:
  *         description: My orders list
  */
-router.get('/me', protect, orderController.listMyOrders);
+router.get("/me", protect, orderController.listMyOrders);
 
 /**
  * @swagger
@@ -87,33 +92,116 @@ router.get('/me', protect, orderController.listMyOrders);
  *       200:
  *         description: Order detail
  */
-router.get('/:id', protect, validateId, validate, orderController.getOrder);
+router.get("/:id", protect, validateId, validate, orderController.getOrder);
+
+router.get(
+  "/:id/shipping",
+  protect,
+  validateId,
+  validate,
+  orderController.getOrderShipping,
+);
+
+router.post(
+  "/:id/shipping/create",
+  protect,
+  validateId,
+  validate,
+  orderController.createOrderShipment,
+);
+
+router.post(
+  "/:id/shipping/sync",
+  protect,
+  validateId,
+  validate,
+  orderController.syncOrderShipment,
+);
+
+router.post(
+  "/:id/shipping/test-status",
+  protect,
+  validateId,
+  updateShipmentTestStatusRules,
+  validate,
+  orderController.updateOrderShipmentTestStatus,
+);
+
+router.post(
+  "/:id/shipping/print-label",
+  protect,
+  validateId,
+  validate,
+  orderController.printOrderShipmentLabel,
+);
+
+router.post(
+  "/:id/shipping/cancel",
+  protect,
+  validateId,
+  validate,
+  orderController.cancelOrderShipment,
+);
+
+router.post(
+  "/:id/shipping/return",
+  protect,
+  validateId,
+  validate,
+  orderController.returnOrderShipment,
+);
+
+router.post(
+  "/:id/shipping/delivery-again",
+  protect,
+  validateId,
+  validate,
+  orderController.requestOrderShipmentDeliveryAgain,
+);
 
 router.put(
-  '/:id/items',
+  "/:id/items",
   protect,
   validateId,
   updateOrderItemsRules,
   validate,
-  orderController.updateOrderItems
+  orderController.updateOrderItems,
 );
 
 router.patch(
-  '/:id/items/:itemId',
+  "/:id/items/:itemId",
   protect,
   validateId,
   patchOrderItemRules,
   validate,
-  orderController.patchOrderItem
+  orderController.patchOrderItem,
 );
 
 router.put(
-  '/:id/status',
+  "/:id/status",
   protect,
   validateId,
   updateOrderStatusRules,
   validate,
-  orderController.updateOrderStatus
+  orderController.updateOrderStatus,
+);
+
+router.put(
+  "/:id/ops-stage",
+  protect,
+  validateId,
+  updateOrderOpsStageRules,
+  validate,
+  orderController.updateOrderOpsStage,
+);
+
+router.put(
+  "/:id/ops-execution",
+  protect,
+  validateId,
+  updateOrderOpsExecutionRules,
+  validate,
+  orderController.updateOrderOpsExecution,
 );
 
 /**
@@ -135,21 +223,21 @@ router.put(
  *         description: Order cancelled
  */
 router.put(
-  '/:id/cancel',
+  "/:id/cancel",
   protect,
   validateId,
   cancelOrderRules,
   validate,
-  orderController.cancelOrder
+  orderController.cancelOrder,
 );
 
 router.put(
-  '/:id/refund',
+  "/:id/refund",
   protect,
   validateId,
   updateRefundStatusRules,
   validate,
-  orderController.updateRefundStatus
+  orderController.updateRefundStatus,
 );
 
 module.exports = router;

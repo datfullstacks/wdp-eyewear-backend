@@ -10,7 +10,7 @@ router.use(protect);
 
 router.get(
   '/receipts',
-  authorize('admin', 'manager', 'operations', 'sales'),
+  authorize('manager', 'operations', 'sales'),
   listReceiptRules,
   validate,
   inventoryController.listReceipts
@@ -18,7 +18,7 @@ router.get(
 
 router.get(
   '/receipts/:id',
-  authorize('admin', 'manager', 'operations', 'sales'),
+  authorize('manager', 'operations', 'sales'),
   validateId,
   validate,
   inventoryController.getReceiptById
@@ -26,7 +26,7 @@ router.get(
 
 router.post(
   '/receipts',
-  authorize('admin', 'manager', 'operations'),
+  authorize('manager', 'operations'),
   createReceiptRules,
   validate,
   inventoryController.createReceipt

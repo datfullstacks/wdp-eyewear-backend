@@ -36,6 +36,6 @@ exports.receiveBatch = asyncHandler(async (req, res) => {
 });
 
 exports.updateBatchStatus = asyncHandler(async (req, res) => {
-  const batch = await preorderService.updateBatchStatus(req.params.id, req.body.status);
+  const batch = await preorderService.updateBatchStatus(req.params.id, req.body.status, req.user);
   ApiResponse.success(res, batch, 'Preorder batch status updated successfully');
 });

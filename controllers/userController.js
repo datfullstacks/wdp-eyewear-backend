@@ -2,6 +2,12 @@ const userService = require('../services/userService');
 const asyncHandler = require('../helpers/asyncHandler');
 const ApiResponse = require('../helpers/response');
 
+// Create user
+exports.createUser = asyncHandler(async (req, res) => {
+  const user = await userService.createUser(req.body, req.user);
+  ApiResponse.created(res, user, 'User created successfully');
+});
+
 // Get all users (Admin only)
 exports.getAllUsers = asyncHandler(async (req, res) => {
   const { page = 1, limit = 10, role, search } = req.query;
@@ -21,19 +27,19 @@ exports.getAllUsers = asyncHandler(async (req, res) => {
 
 // Get user by ID
 exports.getUserById = asyncHandler(async (req, res) => {
-  const user = await userService.getUserById(req.params.id);
+  const user = await userService.getUserById(req.params.id, req.user);
   ApiResponse.success(res, user);
 });
 
 // Update user
 exports.updateUser = asyncHandler(async (req, res) => {
-  const user = await userService.updateUser(req.params.id, req.body);
+  const user = await userService.updateUser(req.params.id, req.body, req.user);
   ApiResponse.success(res, user, 'User updated successfully');
 });
 
 // Delete user
 exports.deleteUser = asyncHandler(async (req, res) => {
-  await userService.deleteUser(req.params.id);
+  await userService.deleteUser(req.params.id, req.user);
   ApiResponse.success(res, null, 'User deleted successfully');
 });
 
@@ -186,4 +192,14 @@ exports.markMyNotificationAsRead = asyncHandler(async (req, res) => {
 exports.markAllMyNotificationsAsRead = asyncHandler(async (req, res) => {
   const notifications = await userService.markAllNotificationsAsRead(req.user.id);
   ApiResponse.success(res, notifications, 'All notifications marked as read');
+});
+
+exports.registerMyPushToken = asyncHandler(async (req, res) => {
+  const pushTokens = await userService.registerMyPushToken(req.user.id, req.body);
+  ApiResponse.success(res, pushTokens, 'Push token registered successfully');
+});
+
+exports.unregisterMyPushToken = asyncHandler(async (req, res) => {
+  const pushTokens = await userService.unregisterMyPushToken(req.user.id, req.body?.token);
+  ApiResponse.success(res, pushTokens, 'Push token unregistered successfully');
 });

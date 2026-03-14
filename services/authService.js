@@ -2,6 +2,7 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const AppError = require('../errors/AppError');
+const { ROLE } = require('../helpers/roles');
 const { supabaseAuth } = require('./supabaseClient');
 
 class AuthService {
@@ -16,7 +17,7 @@ class AuthService {
 
   // Register new user
   async register(userData) {
-    const { name, email, password, role } = userData;
+    const { name, email, password } = userData;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -31,7 +32,7 @@ class AuthService {
       email,
       password: hashedPassword,
       provider: 'local',
-      role: role || 'customer'
+      role: ROLE.CUSTOMER
     });
 
     const token = this.generateToken(user._id, user.role);

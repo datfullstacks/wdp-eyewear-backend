@@ -2,6 +2,7 @@ const Product = require('../models/Product');
 const Order = require('../models/Order');
 const AppError = require('../errors/AppError');
 const { TRY_ON_STATUS, PRODUCT_TYPES, PRODUCT_STATUS } = require('../constants');
+const { publishStatusChange } = require('../helpers/statusEvents');
 
 const TRY_ON_STATUS_VALUES = new Set(Object.values(TRY_ON_STATUS));
 const OPERATION_ROLE_ALLOWED_TRY_ON_STATUSES = new Set([
@@ -162,7 +163,6 @@ class ProductService {
   }) {
     if (!hasTryOnPayload && !hasAssetPayload) return;
     if (!role) throw new AppError('Forbidden', 403);
-    if (role === 'admin') return;
 
     if (role === 'operations') {
       const canEditAssetsWhenReturningToDraft =
@@ -527,6 +527,8 @@ class ProductService {
     if (!product) {
       throw new AppError('Product not found', 404);
     }
+    const previousProductStatus = product.status;
+    const previousTryOnStatus = product?.media?.tryOn?.status || TRY_ON_STATUS.DRAFT;
 
     const payload = deepClone(updateData);
     if (payload.name && !payload.slug) {
@@ -539,6 +541,31 @@ class ProductService {
 
     product.set(payload);
     await product.save();
+
+    publishStatusChange({
+      domain: 'product',
+      entityId: product._id,
+      previousStatus: previousProductStatus,
+      nextStatus: product.status,
+      currentUser,
+      meta: {
+        name: product.name,
+        type: product.type,
+      },
+    });
+    publishStatusChange({
+      domain: 'product',
+      entityId: product._id,
+      statusField: 'media.tryOn.status',
+      previousStatus: previousTryOnStatus,
+      nextStatus: product?.media?.tryOn?.status || TRY_ON_STATUS.DRAFT,
+      currentUser,
+      meta: {
+        name: product.name,
+        type: product.type,
+      },
+    });
+
     return product;
   }
 
