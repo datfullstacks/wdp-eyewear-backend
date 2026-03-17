@@ -12,6 +12,60 @@ const { checkoutRules, checkoutQuoteRules } = require('../validators/checkoutVal
  *     description: Checkout flow with Sepay
  * components:
  *   schemas:
+ *     CheckoutPrescriptionEye:
+ *       type: object
+ *       properties:
+ *         sphere:
+ *           type: string
+ *         cyl:
+ *           type: string
+ *         axis:
+ *           type: string
+ *         add:
+ *           type: string
+ *     CheckoutPrescription:
+ *       type: object
+ *       properties:
+ *         mode:
+ *           type: string
+ *           enum: [none, manual, upload]
+ *         isMyopic:
+ *           type: boolean
+ *         rightEye:
+ *           $ref: '#/components/schemas/CheckoutPrescriptionEye'
+ *         leftEye:
+ *           $ref: '#/components/schemas/CheckoutPrescriptionEye'
+ *         pd:
+ *           type: string
+ *         note:
+ *           type: string
+ *         attachmentUrls:
+ *           type: array
+ *           items:
+ *             type: string
+ *             format: uri
+ *     CheckoutItemCustomization:
+ *       type: object
+ *       properties:
+ *         selectedColor:
+ *           type: string
+ *         selectedSize:
+ *           type: string
+ *         photochromic:
+ *           type: boolean
+ *         note:
+ *           type: string
+ *         combineWith:
+ *           type: object
+ *           properties:
+ *             productId:
+ *               type: string
+ *             variantId:
+ *               type: string
+ *             note:
+ *               type: string
+ *         prescription:
+ *           $ref: '#/components/schemas/CheckoutPrescription'
  *     CheckoutItem:
  *       type: object
  *       required: [productId, quantity]
@@ -20,8 +74,13 @@ const { checkoutRules, checkoutQuoteRules } = require('../validators/checkoutVal
  *           type: string
  *         variantId:
  *           type: string
+ *           nullable: true
  *         quantity:
  *           type: integer
+ *           minimum: 1
+ *           example: 1
+ *         customization:
+ *           $ref: '#/components/schemas/CheckoutItemCustomization'
  *     CheckoutAddress:
  *       type: object
  *       properties:
@@ -31,8 +90,11 @@ const { checkoutRules, checkoutQuoteRules } = require('../validators/checkoutVal
  *         line1: { type: string }
  *         line2: { type: string }
  *         ward: { type: string }
+ *         wardCode: { type: string }
  *         district: { type: string }
+ *         districtId: { type: integer }
  *         province: { type: string }
+ *         provinceId: { type: integer }
  *         country: { type: string }
  *         note: { type: string }
  *     CheckoutInput:
@@ -54,6 +116,11 @@ const { checkoutRules, checkoutQuoteRules } = require('../validators/checkoutVal
  *           enum: [standard, express]
  *         shippingAddress:
  *           $ref: '#/components/schemas/CheckoutAddress'
+ *         cartType:
+ *           type: string
+ *           enum: [ready_stock, pre_order]
+ *         voucherCode:
+ *           type: string
  *         note:
  *           type: string
  */
