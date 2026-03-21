@@ -111,17 +111,142 @@ exports.cancelOrderRules = [
   body(['bankAccount.note', 'bank_account.note']).optional().isString().isLength({ max: 500 })
 ];
 
+exports.requestRefundRules = [
+  body('reason').notEmpty().isString().isLength({ max: 500 }),
+  body('reasonCode').optional().isString().isLength({ max: 100 }),
+  body('requestShippingFee').optional().isBoolean(),
+  body('customerPaidReturnShippingFee').optional().isFloat({ min: 0 }),
+  body('responsibility').optional().isIn(['customer', 'system', 'carrier', 'mixed']),
+  body('requiresReturn').optional().isBoolean(),
+  body('note').optional().isString().isLength({ max: 500 }),
+  body(['bankAccount', 'bank_account']).optional().isObject(),
+  body(['bankAccount.bankName', 'bank_account.bankName']).optional().isString(),
+  body(['bankAccount.accountNumber', 'bank_account.accountNumber']).optional().isString(),
+  body(['bankAccount.accountHolder', 'bank_account.accountHolder']).optional().isString(),
+  body(['bankAccount.note', 'bank_account.note']).optional().isString().isLength({ max: 500 }),
+  body(['requestedBreakdown', 'requested_breakdown']).optional().isObject(),
+  body([
+    'requestedBreakdown.itemAmount',
+    'requested_breakdown.itemAmount',
+    'requestedBreakdown.shippingFeeAmount',
+    'requested_breakdown.shippingFeeAmount',
+    'requestedBreakdown.returnShippingFeeAmount',
+    'requested_breakdown.returnShippingFeeAmount',
+  ])
+    .optional()
+    .isFloat({ min: 0 }),
+  body('evidence').optional().isArray({ max: 6 }),
+  body('evidence.*').optional().isURL(),
+];
+
 exports.updateRefundStatusRules = [
-  body('status')
-    .notEmpty()
-    .isIn(['requested', 'processing', 'completed', 'rejected'])
-    .withMessage('status must be one of: requested, processing, completed, rejected'),
+  body().custom((_, { req }) => {
+    const action = String(req.body?.action || '').trim();
+    const status = String(req.body?.status || '').trim();
+    const allowedActions = [
+      'start_review',
+      'customer_submit_info',
+      'request_customer_info',
+      'approve',
+      'reject',
+      'escalate',
+      'manager_approve',
+      'manager_reject',
+      'send_back_to_staff',
+      'mark_return_pending',
+      'confirm_return_received',
+      'inspection_failed',
+      'start_processing',
+      'complete',
+    ];
+    const allowedStatuses = [
+      'reviewing',
+      'waiting_customer_info',
+      'approved',
+      'escalated_to_manager',
+      'return_pending',
+      'return_received',
+      'processing',
+      'completed',
+      'rejected',
+    ];
+
+    if (!action && !status) {
+      throw new Error('action or status is required');
+    }
+
+    if (action && !allowedActions.includes(action)) {
+      throw new Error(`action must be one of: ${allowedActions.join(', ')}`);
+    }
+
+    if (status && !allowedStatuses.includes(status)) {
+      throw new Error(`status must be one of: ${allowedStatuses.join(', ')}`);
+    }
+
+    return true;
+  }),
   body('contactNote').optional().isString().isLength({ max: 500 }),
   body(['contactChannels', 'contact_channels']).optional().isArray(),
   body(['contactChannels.*', 'contact_channels.*'])
     .optional()
     .isIn(['email', 'phone']),
-  body('rejectReason').optional().isString().isLength({ max: 500 })
+  body('reason').optional().isString().isLength({ max: 500 }),
+  body('reasonCode').optional().isString().isLength({ max: 100 }),
+  body('requestShippingFee').optional().isBoolean(),
+  body('customerPaidReturnShippingFee').optional().isFloat({ min: 0 }),
+  body('rejectReason').optional().isString().isLength({ max: 500 }),
+  body('escalateReason').optional().isString().isLength({ max: 500 }),
+  body('responsibility').optional().isIn(['customer', 'system', 'carrier', 'mixed']),
+  body('requiresReturn').optional().isBoolean(),
+  body('decisionNote').optional().isString().isLength({ max: 500 }),
+  body('note').optional().isString().isLength({ max: 500 }),
+  body('transactionRef').optional().isString().isLength({ max: 200 }),
+  body('payoutProofUrl').optional({ checkFalsy: true }).isURL(),
+  body('inspectionNote').optional().isString().isLength({ max: 500 }),
+  body('returnShipmentCode').optional().isString().isLength({ max: 120 }),
+  body('returnCarrier').optional().isString().isLength({ max: 80 }),
+  body(['bankAccount', 'bank_account']).optional().isObject(),
+  body(['bankAccount.bankName', 'bank_account.bankName']).optional().isString(),
+  body(['bankAccount.accountNumber', 'bank_account.accountNumber']).optional().isString(),
+  body(['bankAccount.accountHolder', 'bank_account.accountHolder']).optional().isString(),
+  body(['bankAccount.note', 'bank_account.note']).optional().isString().isLength({ max: 500 }),
+  body(['requestedBreakdown', 'requested_breakdown']).optional().isObject(),
+  body([
+    'requestedBreakdown.itemAmount',
+    'requested_breakdown.itemAmount',
+    'requestedBreakdown.shippingFeeAmount',
+    'requested_breakdown.shippingFeeAmount',
+    'requestedBreakdown.returnShippingFeeAmount',
+    'requested_breakdown.returnShippingFeeAmount',
+  ])
+    .optional()
+    .isFloat({ min: 0 }),
+  body(['approvedBreakdown', 'approved_breakdown']).optional().isObject(),
+  body([
+    'approvedBreakdown.itemAmount',
+    'approved_breakdown.itemAmount',
+    'approvedBreakdown.shippingFeeAmount',
+    'approved_breakdown.shippingFeeAmount',
+    'approvedBreakdown.returnShippingFeeAmount',
+    'approved_breakdown.returnShippingFeeAmount',
+  ])
+    .optional()
+    .isFloat({ min: 0 }),
+  body('evidence').optional().isArray({ max: 6 }),
+  body('evidence.*').optional().isURL(),
+];
+
+exports.overrideRefundRules = [
+  body('action')
+    .notEmpty()
+    .isIn([
+      'reassign_sales',
+      'reassign_manager',
+      'reassign_operations',
+      'reset_reviewing',
+      'retry_customer_notification',
+    ]),
+  body('reason').notEmpty().isString().isLength({ max: 500 }),
 ];
 
 exports.updateOrderStatusRules = [

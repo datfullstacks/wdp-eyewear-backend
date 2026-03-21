@@ -224,9 +224,49 @@ const InventoryCommitSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const RefundBreakdownSchema = new mongoose.Schema(
+  {
+    itemAmount: { type: Number, min: 0, default: 0 },
+    shippingFeeAmount: { type: Number, min: 0, default: 0 },
+    returnShippingFeeAmount: { type: Number, min: 0, default: 0 },
+    total: { type: Number, min: 0, default: 0 },
+  },
+  { _id: false },
+);
+
+const RefundBankAccountSchema = new mongoose.Schema(
+  {
+    bankName: { type: String, default: "" },
+    accountNumber: { type: String, default: "" },
+    accountHolder: { type: String, default: "" },
+    note: { type: String, default: "" },
+  },
+  { _id: false },
+);
+
+const RefundHistoryEntrySchema = new mongoose.Schema(
+  {
+    action: { type: String, default: "" },
+    fromStatus: { type: String, default: "none" },
+    toStatus: { type: String, default: "none" },
+    actorUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    actorRole: { type: String, default: "" },
+    actorName: { type: String, default: "" },
+    note: { type: String, default: "" },
+    meta: { type: mongoose.Schema.Types.Mixed, default: null },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const OrderSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    storeId: { type: mongoose.Schema.Types.ObjectId, ref: "Store", default: null },
     invoiceId: { type: mongoose.Schema.Types.ObjectId, ref: "Invoice" },
     items: { type: [ItemSchema], required: true },
     subtotal: { type: Number, required: true, min: 0 },
@@ -235,6 +275,11 @@ const OrderSchema = new mongoose.Schema(
     total: { type: Number, required: true, min: 0 },
     payNowTotal: { type: Number, required: true, min: 0 },
     payLaterTotal: { type: Number, required: true, min: 0 },
+    payLaterMethod: {
+      type: String,
+      enum: [PAYMENT_METHODS.COD, "", null],
+      default: null,
+    },
     paymentMethod: {
       type: String,
       enum: Object.values(PAYMENT_METHODS),
@@ -255,6 +300,16 @@ const OrderSchema = new mongoose.Schema(
       type: String,
       enum: ["standard", "express"],
       default: "standard",
+    },
+    shippingCollectionTiming: {
+      type: String,
+      enum: ["upfront", "with_balance", "on_delivery"],
+      default: "upfront",
+    },
+    shippingFeeMode: {
+      type: String,
+      enum: ["exact", "estimated"],
+      default: "estimated",
     },
     shippingAddress: ShippingAddressSchema,
     voucherCode: { type: String, trim: true, uppercase: true, default: "" },
@@ -286,25 +341,67 @@ const OrderSchema = new mongoose.Schema(
     refund: {
       status: {
         type: String,
-        enum: ["none", "requested", "processing", "completed", "rejected"],
+        enum: [
+          "none",
+          "requested",
+          "reviewing",
+          "waiting_customer_info",
+          "escalated_to_manager",
+          "approved",
+          "return_pending",
+          "return_received",
+          "processing",
+          "completed",
+          "rejected",
+        ],
         default: "none",
       },
       reason: { type: String, default: "" },
       requestedAt: { type: Date },
       requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       amount: { type: Number, min: 0, default: 0 },
-      bankAccount: {
-        bankName: String,
-        accountNumber: String,
-        accountHolder: String,
-        note: String,
+      responsibility: {
+        type: String,
+        enum: ["customer", "system", "carrier", "mixed"],
       },
+      requiresReturn: { type: Boolean, default: false },
+      requestedBreakdown: { type: RefundBreakdownSchema, default: () => ({}) },
+      approvedBreakdown: { type: RefundBreakdownSchema, default: () => ({}) },
+      bankAccount: { type: RefundBankAccountSchema, default: () => ({}) },
       contactChannels: [{ type: String, enum: ["email", "phone"] }],
       contactNote: { type: String, default: "" },
       contactAt: { type: Date },
+      currentOwnerRole: { type: String, default: "none" },
+      currentOwnerUserId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        default: null,
+      },
+      nextActionCode: { type: String, default: "" },
+      approvedAt: { type: Date },
+      approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      escalatedAt: { type: Date },
+      escalatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      escalateReason: { type: String, default: "" },
+      decisionNote: { type: String, default: "" },
+      inspectionStatus: {
+        type: String,
+        enum: ["not_required", "pending", "passed", "failed"],
+        default: "not_required",
+      },
+      inspectionNote: { type: String, default: "" },
+      inspectionAt: { type: Date },
+      inspectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      returnShipmentCode: { type: String, default: "" },
+      returnCarrier: { type: String, default: "" },
+      returnReceivedAt: { type: Date },
       processedAt: { type: Date },
       processedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      transactionRef: { type: String, default: "" },
+      payoutProofUrl: { type: String, default: "" },
+      evidence: { type: [String], default: [] },
       rejectReason: { type: String, default: "" },
+      history: { type: [RefundHistoryEntrySchema], default: [] },
     },
   },
   { timestamps: true },

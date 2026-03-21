@@ -172,6 +172,11 @@ const productSchema = new Schema({
     depositPercent: { type: Number, min: 0, max: 100 }, // 0 or undefined = full payment
     maxQuantityPerOrder: { type: Number, min: 1 },
     allowCod: { type: Boolean, default: true },
+    shippingCollectionTiming: {
+      type: String,
+      enum: ["upfront", "with_balance", "on_delivery"],
+      default: "upfront",
+    },
     note: String             // FE note (e.g. "Ships in week 3/2")
   },
 
@@ -202,6 +207,13 @@ const productSchema = new Schema({
     frameProductId: { type: Schema.Types.ObjectId, ref: 'Product' },
     lensProductId: { type: Schema.Types.ObjectId, ref: 'Product' },
     defaultNonPrescription: { type: Boolean, default: true }
+  },
+
+  storeScope: {
+    mode: { type: String, enum: ['all', 'selected'], default: 'all' },
+    primaryStoreId: { type: Schema.Types.ObjectId, ref: 'Store' },
+    storeIds: [{ type: Schema.Types.ObjectId, ref: 'Store' }],
+    note: String,
   },
 
   media: {

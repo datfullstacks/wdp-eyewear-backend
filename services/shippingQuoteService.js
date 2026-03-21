@@ -1,5 +1,6 @@
 const AppError = require("../errors/AppError");
 const { GHN_SHOP_ID } = require("../config/ghn");
+const Store = require("../models/Store");
 const ghnService = require("./ghnService");
 
 const SUPPORTED_SHIPPING_METHODS = ["standard", "express"];
@@ -75,7 +76,7 @@ async function listStores() {
   }
 
   storeCache.promise = ghnService
-    .getStores({ limit: 20 })
+    .getStores({ limit: 200 })
     .then((payload) => {
       const stores = Array.isArray(payload?.data?.shops)
         ? payload.data.shops.map(mapStore).filter((store) => store.id)
@@ -91,7 +92,80 @@ async function listStores() {
   return storeCache.promise;
 }
 
-async function resolveOriginStore() {
+function buildLocalStoreOrigin(raw = {}) {
+  return {
+    localStoreId: toTrimmedString(raw?._id),
+    shopId: normalizePositiveInteger(raw?.ghn?.shopId),
+    districtId: normalizePositiveInteger(raw?.ghn?.districtId),
+    wardCode: toTrimmedString(raw?.ghn?.wardCode),
+    name: toTrimmedString(raw?.name),
+    phone: toTrimmedString(raw?.phone),
+    address: toTrimmedString(raw?.ghn?.address || raw?.addressLine1),
+    wardName: toTrimmedString(raw?.ghn?.wardName || raw?.ward),
+    districtName: toTrimmedString(raw?.ghn?.districtName || raw?.district),
+    provinceName: toTrimmedString(raw?.ghn?.provinceName || raw?.city),
+  };
+}
+
+function hasCompleteOriginStore(store = {}) {
+  return Boolean(
+    normalizePositiveInteger(store?.shopId) &&
+      normalizePositiveInteger(store?.districtId) &&
+      toTrimmedString(store?.wardCode) &&
+      toTrimmedString(store?.name) &&
+      toTrimmedString(store?.phone) &&
+      toTrimmedString(store?.address),
+  );
+}
+
+async function hydrateOriginStoreFromRemote(originStore = {}) {
+  const shopId = normalizePositiveInteger(originStore?.shopId);
+  if (!shopId) {
+    return originStore;
+  }
+
+  const remoteStore = (await listStores()).find((item) => item.id === shopId);
+  if (!remoteStore) {
+    return originStore;
+  }
+
+  return {
+    ...originStore,
+    districtId: normalizePositiveInteger(originStore?.districtId) || remoteStore.districtId,
+    wardCode: toTrimmedString(originStore?.wardCode) || remoteStore.wardCode,
+    name: toTrimmedString(originStore?.name) || remoteStore.name,
+    phone: toTrimmedString(originStore?.phone) || remoteStore.phone,
+    address: toTrimmedString(originStore?.address) || remoteStore.address,
+  };
+}
+
+async function resolveOriginStore({ storeId = null } = {}) {
+  const normalizedStoreId = toTrimmedString(storeId);
+  if (normalizedStoreId) {
+    const localStore = await Store.findById(normalizedStoreId).lean();
+    if (!localStore) {
+      throw new AppError("Selected store was not found.", 404);
+    }
+    const localOrigin = await hydrateOriginStoreFromRemote(
+      buildLocalStoreOrigin(localStore),
+    );
+    if (hasCompleteOriginStore(localOrigin)) {
+      return localOrigin;
+    }
+    throw new AppError(
+      "Selected store is missing GHN shop, district, ward, phone, or address configuration.",
+      503,
+    );
+  }
+
+  const defaultLocalStore = await Store.findOne({ isDefault: true, status: "active" }).lean();
+  const localOrigin = defaultLocalStore
+    ? await hydrateOriginStoreFromRemote(buildLocalStoreOrigin(defaultLocalStore))
+    : null;
+  if (localOrigin && hasCompleteOriginStore(localOrigin)) {
+    return localOrigin;
+  }
+
   const stores = await listStores();
   if (!stores.length) {
     throw new AppError(
@@ -323,10 +397,11 @@ async function quoteShipping({
   shippingAddress,
   shippingMethod = "standard",
   subtotal = 0,
+  storeId = null,
 }) {
   const normalizedMethod = normalizeShippingMethod(shippingMethod);
   const destination = normalizeDestination(shippingAddress);
-  const originStore = await resolveOriginStore();
+  const originStore = await resolveOriginStore({ storeId });
   const packageMetrics = buildPackageMetrics(items, subtotal);
 
   const availableServicesResponse = await ghnService.getAvailableServices(
@@ -382,12 +457,16 @@ async function quoteShipping({
     shippingOptions,
     packageMetrics,
     originStore: {
+      localStoreId: originStore.localStoreId || null,
       shopId: originStore.shopId,
       name: originStore.name,
       phone: originStore.phone,
       address: originStore.address,
       districtId: originStore.districtId,
       wardCode: originStore.wardCode,
+      wardName: originStore.wardName || "",
+      districtName: originStore.districtName || "",
+      provinceName: originStore.provinceName || "",
     },
   };
 }

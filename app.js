@@ -27,6 +27,10 @@ var preordersRouter = require('./routes/preorders');
 var cartsRouter = require('./routes/carts');
 var promotionsRouter = require('./routes/promotions');
 var locationsRouter = require('./routes/locations');
+var storesRouter = require('./routes/stores');
+var policiesRouter = require('./routes/policies');
+var systemConfigRouter = require('./routes/systemConfig');
+var analyticsRouter = require('./routes/analytics');
 
 var app = express();
 
@@ -71,6 +75,10 @@ app.use('/api/preorders', preordersRouter);
 app.use('/api/carts', cartsRouter);
 app.use('/api/promotions', promotionsRouter);
 app.use('/api/locations', locationsRouter);
+app.use('/api/stores', storesRouter);
+app.use('/api/policies', policiesRouter);
+app.use('/api/system-config', systemConfigRouter);
+app.use('/api/analytics', analyticsRouter);
 
 // Handle undefined routes
 app.all('*', (req, res, next) => {

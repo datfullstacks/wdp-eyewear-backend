@@ -17,6 +17,7 @@ exports.getAllProducts = asyncHandler(async (req, res) => {
         status,
         season,
         compatibleWith,
+        storeId,
         minPrice,
         maxPrice,
         sort
@@ -25,7 +26,7 @@ exports.getAllProducts = asyncHandler(async (req, res) => {
     const result = await productService.getAllProducts(
         parseInt(page) || 1,
         parseInt(limit) || 10,
-        { search, type, brand, status, season, compatibleWith, minPrice, maxPrice },
+        { search, type, brand, status, season, compatibleWith, storeId, minPrice, maxPrice },
         sort
     );
     
