@@ -1,5 +1,6 @@
 require("dotenv").config({ quiet: true });
 const axios = require("axios");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const GHN_PRODUCTION_BASE_URL = "https://online-gateway.ghn.vn";
 const GHN_TEST_BASE_URL = "https://dev-online-gateway.ghn.vn";
@@ -31,6 +32,22 @@ const GHN_TOKEN = normalizeString(process.env.GHN_TOKEN);
 const GHN_SHOP_ID = normalizeString(process.env.GHN_SHOP_ID);
 const GHN_TIMEOUT_MS = normalizeTimeout(process.env.GHN_TIMEOUT_MS, 10000);
 const GHN_WEBHOOK_SECRET = normalizeString(process.env.GHN_WEBHOOK_SECRET);
+const GHN_PROXY_URL = normalizeString(
+  process.env.GHN_PROXY_URL ||
+    process.env.HTTPS_PROXY ||
+    process.env.HTTP_PROXY,
+);
+
+function buildGhnTransportOptions(proxyUrl = GHN_PROXY_URL) {
+  if (!proxyUrl) return {};
+
+  const proxyAgent = new HttpsProxyAgent(proxyUrl);
+  return {
+    proxy: false,
+    httpAgent: proxyAgent,
+    httpsAgent: proxyAgent,
+  };
+}
 
 const ghnClient = axios.create({
   baseURL: GHN_BASE_URL,
@@ -39,6 +56,7 @@ const ghnClient = axios.create({
     Accept: "application/json",
     "Content-Type": "application/json",
   },
+  ...buildGhnTransportOptions(),
 });
 
 function buildGhnHeaders({
@@ -83,6 +101,8 @@ module.exports = {
   GHN_SHOP_ID,
   GHN_TIMEOUT_MS,
   GHN_WEBHOOK_SECRET,
+  GHN_PROXY_URL,
   buildGhnHeaders,
+  buildGhnTransportOptions,
   isGhnConfigured,
 };
