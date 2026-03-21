@@ -19,6 +19,24 @@ exports.listTickets = asyncHandler(async (req, res) => {
   );
 });
 
+exports.listRefundCases = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 20, status, ownerRole, q } = req.query;
+  const result = await supportService.listRefundCases(req.user, {
+    page,
+    limit,
+    status,
+    ownerRole,
+    q,
+  });
+
+  ApiResponse.paginate(
+    res,
+    result.cases,
+    result.pagination,
+    'Support refund cases retrieved successfully'
+  );
+});
+
 exports.getTicket = asyncHandler(async (req, res) => {
   const ticket = await supportService.getTicketById(req.params.id, req.user);
   ApiResponse.success(res, ticket, 'Support ticket retrieved successfully');

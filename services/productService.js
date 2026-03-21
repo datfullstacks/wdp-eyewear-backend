@@ -1,5 +1,6 @@
 const Product = require('../models/Product');
 const Order = require('../models/Order');
+const Store = require('../models/Store');
 const AppError = require('../errors/AppError');
 const { TRY_ON_STATUS, PRODUCT_TYPES, PRODUCT_STATUS } = require('../constants');
 const { publishStatusChange } = require('../helpers/statusEvents');
@@ -97,6 +98,19 @@ const deepMerge = (baseValue, patchValue) => {
   return merged;
 };
 
+const PRODUCT_STORE_POPULATE = [
+  {
+    path: 'storeScope.primaryStoreId',
+    select:
+      'name code type status phone email addressLine1 ward district city openingHours supportsTryOn supportsPickup isDefault',
+  },
+  {
+    path: 'storeScope.storeIds',
+    select:
+      'name code type status phone email addressLine1 ward district city openingHours supportsTryOn supportsPickup isDefault',
+  },
+];
+
 const normalizeTryOnStatus = (status, fallback = TRY_ON_STATUS.DRAFT) => {
   const normalized = String(status || '')
     .trim()
@@ -128,6 +142,51 @@ const managedTryOnAuditFields = [
 ];
 
 class ProductService {
+  async normalizeStoreScope(storeScopeInput = {}) {
+    if (!isPlainObject(storeScopeInput)) {
+      return { mode: 'all', primaryStoreId: undefined, storeIds: [], note: '' };
+    }
+
+    const mode = String(storeScopeInput.mode || 'all').trim().toLowerCase() === 'selected'
+      ? 'selected'
+      : 'all';
+    const primaryStoreId = String(storeScopeInput.primaryStoreId || '').trim();
+    const dedupedStoreIds = [
+      ...new Set(
+        (Array.isArray(storeScopeInput.storeIds) ? storeScopeInput.storeIds : [])
+          .map((id) => String(id || '').trim())
+          .filter(Boolean)
+      ),
+    ];
+
+    const requestedIds = [...new Set([primaryStoreId, ...dedupedStoreIds].filter(Boolean))];
+    if (requestedIds.length > 0) {
+      const stores = await Store.find({ _id: { $in: requestedIds } }).select('_id');
+      const knownIds = new Set(stores.map((store) => String(store._id)));
+      const invalidIds = requestedIds.filter((id) => !knownIds.has(id));
+      if (invalidIds.length > 0) {
+        throw new AppError('storeScope contains unknown store id(s)', 400);
+      }
+    }
+
+    const normalizedStoreIds =
+      mode === 'selected'
+        ? [...new Set([primaryStoreId, ...dedupedStoreIds].filter(Boolean))]
+        : [];
+
+    return {
+      mode,
+      primaryStoreId: primaryStoreId || undefined,
+      storeIds: normalizedStoreIds,
+      note: String(storeScopeInput.note || '').trim(),
+    };
+  }
+
+  async applyNormalizedStoreScope(payload) {
+    if (!isPlainObject(payload.storeScope)) return;
+    payload.storeScope = await this.normalizeStoreScope(payload.storeScope);
+  }
+
   getRole(currentUser) {
     return String(currentUser?.role || '')
       .trim()
@@ -407,10 +466,11 @@ class ProductService {
       payload.slug = slugify(payload.name);
     }
 
+    await this.applyNormalizedStoreScope(payload);
     this.enforceTryOnRulesOnCreate(payload, currentUser);
 
     const product = await Product.create(payload);
-    return product;
+    return Product.findById(product._id).populate(PRODUCT_STORE_POPULATE);
   }
 
   // Get All with Filter, Sort, Pagination
@@ -427,6 +487,16 @@ class ProductService {
     if (filters.status) queryObj.status = filters.status;
     if (filters.compatibleWith) {
       queryObj['compatibility.productIds'] = filters.compatibleWith;
+    }
+    if (filters.storeId) {
+      queryObj.$and = queryObj.$and || [];
+      queryObj.$and.push({
+        $or: [
+          { 'storeScope.mode': { $exists: false } },
+          { 'storeScope.mode': 'all' },
+          { 'storeScope.storeIds': filters.storeId },
+        ],
+      });
     }
     if (filters.season) {
       queryObj.$and = queryObj.$and || [];
@@ -448,7 +518,11 @@ class ProductService {
     }
 
     const [products, total] = await Promise.all([
-      Product.find(queryObj).sort(sort).skip(skip).limit(limit),
+      Product.find(queryObj)
+        .populate(PRODUCT_STORE_POPULATE)
+        .sort(sort)
+        .skip(skip)
+        .limit(limit),
       Product.countDocuments(queryObj)
     ]);
 
@@ -514,7 +588,7 @@ class ProductService {
 
   // Get One by ID
   async getProductById(id) {
-    const product = await Product.findById(id);
+    const product = await Product.findById(id).populate(PRODUCT_STORE_POPULATE);
     if (!product) {
       throw new AppError('Product not found', 404);
     }
@@ -534,6 +608,7 @@ class ProductService {
     if (payload.name && !payload.slug) {
       payload.slug = slugify(payload.name);
     }
+    await this.applyNormalizedStoreScope(payload);
 
     const existingSnapshot = product.toObject({ depopulate: true });
     const mergedSnapshot = deepMerge(existingSnapshot, payload);
@@ -566,7 +641,7 @@ class ProductService {
       },
     });
 
-    return product;
+    return Product.findById(product._id).populate(PRODUCT_STORE_POPULATE);
   }
 
   // Delete (hard delete)

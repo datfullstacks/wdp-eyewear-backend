@@ -522,11 +522,17 @@ function buildGhnItems(items = []) {
 }
 
 function resolveCodAmount(order) {
-  if (normalizeStatus(order?.paymentMethod) !== PAYMENT_METHODS.COD) {
+  const payLaterMethod = normalizeStatus(order?.payLaterMethod);
+  const payLaterTotal = Math.max(
+    0,
+    Math.round(normalizeNumber(order?.payLaterTotal, 0) || 0),
+  );
+
+  if (payLaterMethod && payLaterMethod !== PAYMENT_METHODS.COD) {
     return 0;
   }
 
-  return Math.max(0, Math.round(normalizeNumber(order?.total, 0) || 0));
+  return payLaterTotal;
 }
 
 function resolvePaymentTypeId(codAmount) {

@@ -1,0 +1,71 @@
+const { body, query } = require('express-validator');
+
+const STORE_TYPES = ['flagship', 'branch', 'kiosk', 'warehouse'];
+const STORE_STATUSES = ['active', 'inactive'];
+
+exports.listStoreRules = [
+  query('page').optional().isInt({ min: 1 }),
+  query('limit').optional().isInt({ min: 1, max: 200 }),
+  query('search').optional().isString(),
+  query('status').optional().isIn([...STORE_STATUSES, 'all']),
+];
+
+exports.createStoreRules = [
+  body('name').notEmpty().withMessage('name is required'),
+  body('code').notEmpty().withMessage('code is required'),
+  body('status').optional().isIn(STORE_STATUSES),
+  body('type').optional().isIn(STORE_TYPES),
+  body('phone').optional().isString(),
+  body('email').optional().isEmail(),
+  body('addressLine1').optional().isString(),
+  body('ward').optional().isString(),
+  body('district').optional().isString(),
+  body('city').optional().isString(),
+  body('openingHours').optional().isString(),
+  body('note').optional().isString(),
+  body('supportsTryOn').optional().isBoolean(),
+  body('supportsPickup').optional().isBoolean(),
+  body('isDefault').optional().isBoolean(),
+  body('sortOrder').optional().isInt({ min: 0 }),
+  body('ghn').optional().isObject().withMessage('ghn must be an object'),
+  body('ghn.autoCreate').optional().isBoolean(),
+  body('ghn.shopId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.clientId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.provinceId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.provinceName').optional().isString(),
+  body('ghn.districtId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.districtName').optional().isString(),
+  body('ghn.wardCode').optional().isString(),
+  body('ghn.wardName').optional().isString(),
+  body('ghn.address').optional().isString(),
+];
+
+exports.updateStoreRules = [
+  body('name').optional().notEmpty(),
+  body('code').optional().notEmpty(),
+  body('status').optional().isIn(STORE_STATUSES),
+  body('type').optional().isIn(STORE_TYPES),
+  body('phone').optional().isString(),
+  body('email').optional().isEmail(),
+  body('addressLine1').optional().isString(),
+  body('ward').optional().isString(),
+  body('district').optional().isString(),
+  body('city').optional().isString(),
+  body('openingHours').optional().isString(),
+  body('note').optional().isString(),
+  body('supportsTryOn').optional().isBoolean(),
+  body('supportsPickup').optional().isBoolean(),
+  body('isDefault').optional().isBoolean(),
+  body('sortOrder').optional().isInt({ min: 0 }),
+  body('ghn').optional().isObject().withMessage('ghn must be an object'),
+  body('ghn.autoCreate').optional().isBoolean(),
+  body('ghn.shopId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.clientId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.provinceId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.provinceName').optional().isString(),
+  body('ghn.districtId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('ghn.districtName').optional().isString(),
+  body('ghn.wardCode').optional().isString(),
+  body('ghn.wardName').optional().isString(),
+  body('ghn.address').optional().isString(),
+];

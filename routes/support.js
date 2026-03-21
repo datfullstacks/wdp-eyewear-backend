@@ -13,6 +13,12 @@ const { validate, validateId } = require('../middlewares/validator');
 
 router.use(protect);
 
+router.get(
+  '/refunds',
+  authorize('manager', 'operations', 'sales', 'admin'),
+  supportController.listRefundCases
+);
+
 /**
  * @swagger
  * /api/support:

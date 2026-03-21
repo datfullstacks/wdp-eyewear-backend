@@ -3,9 +3,26 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const AppError = require('../errors/AppError');
 const { ROLE } = require('../helpers/roles');
+const { getUserStoreAccess } = require('../helpers/storeAccess');
 const { supabaseAuth } = require('./supabaseClient');
 
 class AuthService {
+  buildAuthUserPayload(user) {
+    return {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      avatar: user.avatar,
+      provider: user.provider,
+      phone: user.phone || '',
+      department: user.department || '',
+      position: user.position || '',
+      permissions: Array.isArray(user.permissions) ? user.permissions : [],
+      storeAccess: getUserStoreAccess(user),
+    };
+  }
+
   // Generate JWT Token
   generateToken(userId, userRole) {
     return jwt.sign(
@@ -38,12 +55,7 @@ class AuthService {
     const token = this.generateToken(user._id, user.role);
 
     return {
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role
-      },
+      user: this.buildAuthUserPayload(user),
       token
     };
   }
@@ -67,13 +79,7 @@ class AuthService {
     const token = this.generateToken(user._id, user.role);
 
     return {
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar
-      },
+      user: this.buildAuthUserPayload(user),
       token
     };
   }
@@ -154,14 +160,7 @@ class AuthService {
     const token = this.generateToken(user._id, user.role);
 
     return {
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        avatar: user.avatar,
-        provider: user.provider
-      },
+      user: this.buildAuthUserPayload(user),
       token,
       supabaseAccessToken
     };
@@ -169,7 +168,10 @@ class AuthService {
 
   // Get user by ID
   async getUserById(userId) {
-    const user = await User.findById(userId).select('-password');
+    const user = await User.findById(userId)
+      .select('-password')
+      .populate('storeAccess.primaryStoreId', 'name code type status')
+      .populate('storeAccess.storeIds', 'name code type status');
     if (!user) {
       throw new AppError('User not found', 404);
     }

@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   createUser,
   getAllUsers,
+  getUserStats,
   getUserById,
   updateUser,
   deleteUser,
@@ -1217,6 +1218,7 @@ router.post(
   createUser
 );
 
+router.get('/stats', authorize('admin', 'manager'), getUserStats);
 router.get('/', authorizeUsersListRead, getAllUsers);
 
 router.get('/:id', validateId, validate, getUserById);

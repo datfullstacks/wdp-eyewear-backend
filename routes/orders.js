@@ -7,7 +7,9 @@ const {
   updateOrderItemsRules,
   patchOrderItemRules,
   cancelOrderRules,
+  requestRefundRules,
   updateRefundStatusRules,
+  overrideRefundRules,
   updateOrderOpsStageRules,
   updateOrderOpsExecutionRules,
   updateOrderStatusRules,
@@ -179,13 +181,79 @@ const {
  *               type: string
  *             note:
  *               type: string
- *     OrderRefundStatusInput:
+ *     RefundResponsibility:
+ *       type: string
+ *       enum: [customer, system, carrier, mixed]
+ *     OrderRefundBreakdown:
  *       type: object
- *       required: [status]
  *       properties:
+ *         itemAmount:
+ *           type: number
+ *           minimum: 0
+ *         shippingFeeAmount:
+ *           type: number
+ *           minimum: 0
+ *         returnShippingFeeAmount:
+ *           type: number
+ *           minimum: 0
+ *         total:
+ *           type: number
+ *           minimum: 0
+ *     OrderRefundRequestInput:
+ *       type: object
+ *       required: [reason]
+ *       properties:
+ *         reason:
+ *           type: string
+ *         reasonCode:
+ *           type: string
+ *         requestShippingFee:
+ *           type: boolean
+ *         customerPaidReturnShippingFee:
+ *           type: number
+ *           minimum: 0
+ *         responsibility:
+ *           $ref: '#/components/schemas/RefundResponsibility'
+ *         requiresReturn:
+ *           type: boolean
+ *         note:
+ *           type: string
+ *         requestedBreakdown:
+ *           $ref: '#/components/schemas/OrderRefundBreakdown'
+ *         bankAccount:
+ *           type: object
+ *           properties:
+ *             bankName:
+ *               type: string
+ *             accountNumber:
+ *               type: string
+ *             accountHolder:
+ *               type: string
+ *             note:
+ *               type: string
+ *     OrderRefundActionInput:
+ *       type: object
+ *       properties:
+ *         action:
+ *           type: string
+ *           enum: [start_review, customer_submit_info, request_customer_info, approve, reject, escalate, manager_approve, manager_reject, send_back_to_staff, mark_return_pending, confirm_return_received, start_processing, complete]
  *         status:
  *           type: string
- *           enum: [requested, processing, completed, rejected]
+ *           description: Legacy fallback. Prefer action.
+ *           enum: [reviewing, waiting_customer_info, approved, escalated_to_manager, return_pending, return_received, processing, completed, rejected]
+ *         reason:
+ *           type: string
+ *         reasonCode:
+ *           type: string
+ *         requestShippingFee:
+ *           type: boolean
+ *         customerPaidReturnShippingFee:
+ *           type: number
+ *           minimum: 0
+ *         responsibility:
+ *           $ref: '#/components/schemas/RefundResponsibility'
+ *         requiresReturn:
+ *           type: boolean
  *         contactNote:
  *           type: string
  *         contactChannels:
@@ -193,8 +261,31 @@ const {
  *           items:
  *             type: string
  *             enum: [email, phone]
+ *         decisionNote:
+ *           type: string
+ *         note:
+ *           type: string
  *         rejectReason:
  *           type: string
+ *         escalateReason:
+ *           type: string
+ *         transactionRef:
+ *           type: string
+ *         requestedBreakdown:
+ *           $ref: '#/components/schemas/OrderRefundBreakdown'
+ *         approvedBreakdown:
+ *           $ref: '#/components/schemas/OrderRefundBreakdown'
+ *         bankAccount:
+ *           type: object
+ *           properties:
+ *             bankName:
+ *               type: string
+ *             accountNumber:
+ *               type: string
+ *             accountHolder:
+ *               type: string
+ *             note:
+ *               type: string
  *     OrderStatusInput:
  *       type: object
  *       required: [status]
@@ -518,11 +609,19 @@ const {
  *           properties:
  *             status:
  *               type: string
- *               enum: [none, requested, processing, completed, rejected]
+ *               enum: [none, requested, reviewing, waiting_customer_info, escalated_to_manager, approved, return_pending, return_received, processing, completed, rejected]
  *             reason:
  *               type: string
+ *             responsibility:
+ *               $ref: '#/components/schemas/RefundResponsibility'
+ *             requiresReturn:
+ *               type: boolean
  *             amount:
  *               type: number
+ *             requestedBreakdown:
+ *               $ref: '#/components/schemas/OrderRefundBreakdown'
+ *             approvedBreakdown:
+ *               $ref: '#/components/schemas/OrderRefundBreakdown'
  *             bankAccount:
  *               type: object
  *               properties:
@@ -549,6 +648,20 @@ const {
  *               type: string
  *               format: date-time
  *               nullable: true
+ *             approvedAt:
+ *               type: string
+ *               format: date-time
+ *               nullable: true
+ *             escalatedAt:
+ *               type: string
+ *               format: date-time
+ *               nullable: true
+ *             escalateReason:
+ *               type: string
+ *             decisionNote:
+ *               type: string
+ *             transactionRef:
+ *               type: string
  *             rejectReason:
  *               type: string
  *         payment:
@@ -658,7 +771,7 @@ const {
  *         name: refundStatus
  *         schema:
  *           type: string
- *           enum: [none, requested, processing, completed, rejected]
+ *           enum: [none, requested, reviewing, waiting_customer_info, escalated_to_manager, approved, return_pending, return_received, processing, completed, rejected]
  *       - in: query
  *         name: userId
  *         schema:
@@ -1326,6 +1439,38 @@ router.patch(
  *                   type: string
  *                 data:
  *                   $ref: '#/components/schemas/Order'
+ * /api/orders/{id}/refund-request:
+ *   post:
+ *     summary: Create a refund request for an order
+ *     tags: [Orders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/OrderRefundRequestInput'
+ *     responses:
+ *       201:
+ *         description: Refund request created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   $ref: '#/components/schemas/Order'
  * /api/orders/{id}/refund:
  *   put:
  *     summary: Update refund workflow state for an order
@@ -1343,7 +1488,7 @@ router.patch(
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/OrderRefundStatusInput'
+ *             $ref: '#/components/schemas/OrderRefundActionInput'
  *     responses:
  *       200:
  *         description: Order refund status updated
@@ -1396,6 +1541,15 @@ router.put(
   orderController.cancelOrder,
 );
 
+router.post(
+  "/:id/refund-request",
+  protect,
+  validateId,
+  requestRefundRules,
+  validate,
+  orderController.createRefundRequest,
+);
+
 router.put(
   "/:id/refund",
   protect,
@@ -1403,6 +1557,15 @@ router.put(
   updateRefundStatusRules,
   validate,
   orderController.updateRefundStatus,
+);
+
+router.post(
+  "/:id/refund-override",
+  protect,
+  validateId,
+  overrideRefundRules,
+  validate,
+  orderController.overrideRefund,
 );
 
 module.exports = router;
