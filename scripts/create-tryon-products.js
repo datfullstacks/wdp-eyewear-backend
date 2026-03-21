@@ -7,9 +7,19 @@ const Product = require('../models/Product');
 const { PRODUCT_TYPES, PRODUCT_STATUS, TRY_ON_STATUS } = require('../constants');
 const { supabase, supabaseBucket } = require('../services/supabaseClient');
 
-const LOCAL_GLB_PATH = path.resolve('D:/wdp/3D/effect-1772843546211/assets/glasses.glb');
+const LOCAL_GLB_PATH_CANDIDATES = [
+  process.env.TRYON_SOURCE_GLB,
+  'D:/wdp/3D/effect-1772843546211/assets/glasses.glb',
+  'D:/wdp/3D/effect-1772848523106/assets/scene.glb',
+]
+  .filter(Boolean)
+  .map((candidate) => path.resolve(candidate));
+const LOCAL_GLB_PATH =
+  LOCAL_GLB_PATH_CANDIDATES.find((candidate) => fs.existsSync(candidate)) ||
+  LOCAL_GLB_PATH_CANDIDATES[0];
 const STORAGE_ROOT = 'tryon/generated';
 const SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 365 * 10;
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
 const IMAGE_OBJECTS = [
   'uploads/photobooth-1772789460272.jpg',
@@ -23,31 +33,177 @@ const PRODUCTS = [
     slug: 'wdp-tryon-urban-frame',
     name: 'WDP TryOn Urban Frame',
     description: 'Android Banuba try-on test frame with per-variant GLB assets.',
-    basePrice: 1190000,
+    basePrice: 175000,
     brand: 'WDP',
     shape: 'rectangle',
+    weightGram: 22,
+    collections: ['core-frames', 'studio-select'],
+    keywords: ['wdp', 'frame', 'rectangle', 'ready-stock'],
     variants: [
-      { color: 'Black', size: 'M', stock: 18, price: 1190000, imageIndex: 0 },
-      { color: 'Brown', size: 'M', stock: 12, price: 1190000, imageIndex: 1 },
-      { color: 'Crystal', size: 'L', stock: 8, price: 1240000, imageIndex: 2 },
+      { color: 'Black', size: 'M', stock: 18, price: 175000, imageIndex: 0 },
+      { color: 'Brown', size: 'M', stock: 12, price: 180000, imageIndex: 1 },
+      { color: 'Crystal', size: 'L', stock: 8, price: 185000, imageIndex: 2 },
     ],
   },
   {
     slug: 'wdp-tryon-air-frame',
     name: 'WDP TryOn Air Frame',
     description: 'Lightweight frame seeded for Android try-on flow with variant asset mapping.',
-    basePrice: 1390000,
+    basePrice: 185000,
     brand: 'WDP',
     shape: 'round',
+    weightGram: 20,
+    collections: ['core-frames', 'studio-select'],
+    keywords: ['wdp', 'frame', 'round', 'ready-stock'],
     variants: [
-      { color: 'Silver', size: 'S', stock: 10, price: 1390000, imageIndex: 3 },
-      { color: 'Gunmetal', size: 'M', stock: 11, price: 1390000, imageIndex: 0 },
-      { color: 'Gold', size: 'L', stock: 7, price: 1450000, imageIndex: 1 },
+      { color: 'Silver', size: 'S', stock: 10, price: 185000, imageIndex: 3 },
+      { color: 'Gunmetal', size: 'M', stock: 11, price: 190000, imageIndex: 0 },
+      { color: 'Gold', size: 'L', stock: 7, price: 195000, imageIndex: 1 },
+    ],
+  },
+  {
+    slug: 'wdp-preorder-metro-hex-frame',
+    name: 'WDP Preorder Metro Hex Frame',
+    description: 'Hexagonal preorder frame with split-payment config for customer preorder journeys.',
+    basePrice: 195000,
+    brand: 'WDP',
+    shape: 'hexagon',
+    weightGram: 24,
+    collections: ['preorder', 'launch-drop'],
+    keywords: ['wdp', 'frame', 'hexagon', 'preorder'],
+    preOrder: {
+      enabled: true,
+      allowCod: true,
+      depositPercent: 30,
+      maxQuantityPerOrder: 2,
+      shippingCollectionTiming: 'with_balance',
+      startAtOffsetDays: -2,
+      endAtOffsetDays: 30,
+      shipFromOffsetDays: 10,
+      shipToOffsetDays: 24,
+      note: 'Preorder dot 30%, phi ship thu cung dot thanh toan con lai.',
+    },
+    variants: [
+      { color: 'Obsidian', size: 'M', stock: 0, price: 195000, imageIndex: 2 },
+      { color: 'Champagne', size: 'L', stock: 0, price: 200000, imageIndex: 3 },
+      { color: 'Rose Gold', size: 'M', stock: 0, price: 200000, imageIndex: 1 },
+    ],
+  },
+  {
+    slug: 'wdp-preorder-aero-rimless-frame',
+    name: 'WDP Preorder Aero Rimless Frame',
+    description: 'Rimless preorder frame seeded with upfront shipping collection for launch campaigns.',
+    basePrice: 145000,
+    brand: 'WDP',
+    shape: 'oval',
+    weightGram: 18,
+    collections: ['preorder', 'launch-drop'],
+    keywords: ['wdp', 'frame', 'oval', 'preorder'],
+    preOrder: {
+      enabled: true,
+      allowCod: true,
+      depositPercent: 40,
+      maxQuantityPerOrder: 1,
+      shippingCollectionTiming: 'upfront',
+      startAtOffsetDays: -1,
+      endAtOffsetDays: 21,
+      shipFromOffsetDays: 7,
+      shipToOffsetDays: 18,
+      note: 'Preorder dot 40%, phi ship thu ngay trong dot dat hang.',
+    },
+    variants: [
+      { color: 'Titanium', size: 'M', stock: 0, price: 145000, imageIndex: 0 },
+      { color: 'Matte Navy', size: 'L', stock: 0, price: 150000, imageIndex: 2 },
+      { color: 'Smoke Gray', size: 'M', stock: 0, price: 155000, imageIndex: 3 },
+    ],
+  },
+  {
+    slug: 'wdp-preorder-celeste-cat-eye',
+    name: 'WDP Preorder Celeste Cat Eye',
+    description: 'Cat-eye preorder frame with shipping collected on delivery for COD remainder flows.',
+    basePrice: 155000,
+    brand: 'WDP',
+    shape: 'cat_eye',
+    weightGram: 23,
+    collections: ['preorder', 'launch-drop'],
+    keywords: ['wdp', 'frame', 'cat-eye', 'preorder'],
+    preOrder: {
+      enabled: true,
+      allowCod: true,
+      depositPercent: 35,
+      maxQuantityPerOrder: 2,
+      shippingCollectionTiming: 'on_delivery',
+      startAtOffsetDays: -3,
+      endAtOffsetDays: 35,
+      shipFromOffsetDays: 14,
+      shipToOffsetDays: 28,
+      note: 'Preorder dot 35%, phi ship thu khi giao hang va thu phan COD con lai.',
+    },
+    variants: [
+      { color: 'Cherry Wine', size: 'S', stock: 0, price: 155000, imageIndex: 1 },
+      { color: 'Moon Beige', size: 'M', stock: 0, price: 160000, imageIndex: 0 },
+      { color: 'Gloss Black', size: 'M', stock: 0, price: 165000, imageIndex: 2 },
     ],
   },
 ];
 
 const trim = (value) => String(value ?? '').trim();
+
+function addDays(offsetDays, now = Date.now()) {
+  return new Date(now + Number(offsetDays || 0) * DAY_IN_MS);
+}
+
+function buildPreOrderConfig(definition) {
+  if (!definition?.preOrder?.enabled) {
+    return {
+      enabled: false,
+      allowCod: true,
+    };
+  }
+
+  const config = definition.preOrder || {};
+
+  return {
+    enabled: true,
+    allowCod: Boolean(config.allowCod ?? true),
+    depositPercent: Number.isFinite(Number(config.depositPercent))
+      ? Number(config.depositPercent)
+      : undefined,
+    maxQuantityPerOrder: Number.isFinite(Number(config.maxQuantityPerOrder))
+      ? Number(config.maxQuantityPerOrder)
+      : undefined,
+    startAt: addDays(config.startAtOffsetDays ?? -1),
+    endAt: addDays(config.endAtOffsetDays ?? 30),
+    shipFrom: addDays(config.shipFromOffsetDays ?? 7),
+    shipTo: addDays(config.shipToOffsetDays ?? 21),
+    shippingCollectionTiming: trim(config.shippingCollectionTiming) || 'upfront',
+    note: trim(config.note),
+  };
+}
+
+function buildSeo(definition) {
+  const keywords = Array.from(
+    new Set(
+      [
+        definition.brand,
+        definition.shape,
+        definition.preOrder?.enabled ? 'preorder' : 'ready-stock',
+        ...(Array.isArray(definition.keywords) ? definition.keywords : []),
+      ]
+        .map((value) => trim(value).toLowerCase())
+        .filter(Boolean)
+    )
+  );
+
+  return {
+    modelCode: trim(definition.slug).toUpperCase().replace(/[^A-Z0-9]+/g, '-'),
+    collections: Array.isArray(definition.collections) ? definition.collections : ['studio-select'],
+    season: 'all_season',
+    seasons: ['all_season'],
+    keywords,
+    countryOfOrigin: 'Vietnam',
+  };
+}
 
 async function getStorageUrl(objectPath) {
   const { data, error } = await supabase.storage
@@ -171,14 +327,26 @@ async function buildProductPayload({ definition, uploadedVariants }) {
     pricing: {
       currency: 'VND',
       basePrice: definition.basePrice,
+      salePrice: null,
+      discountPercent: 0,
+      taxRate: 8,
     },
     inventory: {
       track: true,
       threshold: 1,
     },
-    preOrder: {
-      enabled: false,
-      allowCod: true,
+    preOrder: buildPreOrderConfig(definition),
+    fulfillment: {
+      supplier: definition.brand,
+      leadTime: definition.preOrder?.enabled ? '10-21 days' : '2-4 days',
+      returnWindowDays: 30,
+      warrantyMonths: 12,
+      warehouseDefaultLocation: 'HCM-FRAME-01',
+    },
+    seo: buildSeo(definition),
+    compatibility: {
+      productIds: [],
+      notes: 'Compatible with lens upgrades and core accessories.',
     },
     media: {
       primaryAssetId: String(assets[0]?._id || ''),
@@ -204,10 +372,13 @@ async function buildProductPayload({ definition, uploadedVariants }) {
       common: {
         shape: definition.shape,
         gender: 'unisex',
+        weightGram: Number(definition.weightGram) || 22,
+        standards: ['ISO 12870'],
       },
       frame: {
         material: 'acetate',
         hingeType: 'spring',
+        nosePads: true,
         rimType: 'full',
         rxReady: true,
       },
@@ -218,7 +389,46 @@ async function buildProductPayload({ definition, uploadedVariants }) {
         lensWidthMm: 52,
         lensHeightMm: 40,
       },
+      lens: {
+        uvProtection: 'UV400',
+        polarized: false,
+        photochromic: false,
+        blueLightFilter: false,
+        category: 3,
+        vltPercent: 15,
+        tintColor: 'smoke',
+        tintPercent: 80,
+        coatings: ['anti-scratch', 'oleophobic'],
+        lensType: 'single_vision',
+        material: 'polycarbonate',
+        index: 1.56,
+        features: ['impact-resistant'],
+        prescriptionRange: {
+          sphMin: -8,
+          sphMax: 4,
+          cylMin: -2,
+          cylMax: 0,
+          axisMin: 0,
+          axisMax: 180,
+          addMin: 0,
+          addMax: 3,
+        },
+        diameterMm: 70,
+        thicknessOptionsMm: [1.5, 1.6],
+      },
+      accessory: {
+        compatibleWith: ['frame', 'sunglasses'],
+      },
+      service: {
+        includedItems: ['Store consultation'],
+      },
+      bundle: {
+        items: [],
+      },
     },
+    servicesIncluded: ['Dieu chinh gong mien phi', 'Ve sinh kinh tai cua hang'],
+    ratingsAverage: 4.6,
+    ratingsQuantity: 12,
   };
 }
 
@@ -250,7 +460,9 @@ async function main() {
     throw new Error('Supabase admin client is unavailable. Check SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
   }
   if (!fs.existsSync(LOCAL_GLB_PATH)) {
-    throw new Error(`Missing local GLB source: ${LOCAL_GLB_PATH}`);
+    throw new Error(
+      `Missing local GLB source. Checked: ${LOCAL_GLB_PATH_CANDIDATES.join(', ')}`
+    );
   }
 
   await mongoose.connect(process.env.MONGODB_URI);
@@ -283,6 +495,9 @@ async function main() {
       productId: String(product._id),
       slug: product.slug,
       variants: product.variants.length,
+      preOrderEnabled: Boolean(product.preOrder?.enabled),
+      depositPercent: product.preOrder?.depositPercent ?? null,
+      shippingCollectionTiming: product.preOrder?.shippingCollectionTiming ?? null,
       tryOnStatus: product.media?.tryOn?.status,
       tryOnEnabled: product.media?.tryOn?.enabled,
       glbUrls: uploadedVariants.map((variant) => variant.glbStorageUrl),

@@ -1,7 +1,12 @@
 const express = require('express');
 const promotionController = require('../controllers/promotionController');
-const { validate } = require('../middlewares/validator');
-const { validatePromotionRules } = require('../validators/promotionValidator');
+const { protect, authorize } = require('../middlewares/auth');
+const { validate, validateId } = require('../middlewares/validator');
+const {
+  validatePromotionRules,
+  createPromotionRules,
+  updatePromotionRules,
+} = require('../validators/promotionValidator');
 
 const router = express.Router();
 
@@ -127,6 +132,45 @@ const router = express.Router();
  *         description: Invalid or inapplicable voucher
  */
 
+router.get(
+  '/',
+  protect,
+  authorize('manager', 'admin'),
+  promotionController.listPromotions
+);
+router.post(
+  '/',
+  protect,
+  authorize('manager', 'admin'),
+  createPromotionRules,
+  validate,
+  promotionController.createPromotion
+);
 router.post('/validate', validatePromotionRules, validate, promotionController.validateVoucher);
+router.get(
+  '/:id',
+  protect,
+  authorize('manager', 'admin'),
+  validateId,
+  validate,
+  promotionController.getPromotionById
+);
+router.put(
+  '/:id',
+  protect,
+  authorize('manager', 'admin'),
+  validateId,
+  updatePromotionRules,
+  validate,
+  promotionController.updatePromotion
+);
+router.delete(
+  '/:id',
+  protect,
+  authorize('manager', 'admin'),
+  validateId,
+  validate,
+  promotionController.deletePromotion
+);
 
 module.exports = router;

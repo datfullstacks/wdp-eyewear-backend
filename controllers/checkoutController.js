@@ -50,8 +50,10 @@ const normalizeInput = (body) => {
       body.discountAmount ?? body.discount_amount,
       0,
     ),
+    paymentMethod: body.paymentMethod || body.payment_method,
     shippingMethod: body.shippingMethod || body.shipping_method,
     shippingAddress: body.shippingAddress || body.shipping_address,
+    storeId: body.storeId || body.store_id,
     cartType: body.cartType || body.cart_type,
     voucherCode: body.voucherCode || body.voucher_code,
     note: body.note,
@@ -67,14 +69,17 @@ exports.quote = asyncHandler(async (req, res) => {
     input.discountAmount,
     {
       cartType: input.cartType,
+      paymentMethod: input.paymentMethod,
       voucherCode: input.voucherCode,
       shippingMethod: input.shippingMethod,
       shippingAddress: input.shippingAddress,
+      storeId: input.storeId,
+      currentUser: req.user || null,
     },
   );
   ApiResponse.success(res, {
     ...result,
-    paymentMethod: PAYMENT_METHODS.SEPAY,
+    paymentMethod: result.paymentMethod || input.paymentMethod || PAYMENT_METHODS.SEPAY,
   });
 });
 
@@ -90,23 +95,40 @@ exports.create = asyncHandler(async (req, res) => {
     discountAmount: input.discountAmount ?? 0,
     shippingMethod: input.shippingMethod || "standard",
     shippingAddress: input.shippingAddress,
+    storeId: input.storeId,
     cartType: input.cartType,
+    paymentMethod: input.paymentMethod,
     voucherCode: input.voucherCode,
     note: input.note,
   });
 
-  const payAmount = quote.payNow;
+  const selectedPaymentMethod = String(
+    quote.paymentMethod || input.paymentMethod || PAYMENT_METHODS.SEPAY,
+  )
+    .trim()
+    .toLowerCase();
+  const isCodOrder = selectedPaymentMethod === PAYMENT_METHODS.COD;
+  const payAmount = isCodOrder ? quote.payLater : quote.payNow;
   const paymentContent = order.paymentCode;
   const bankAccountNumber =
     SEPAY_BANK_ACCOUNT_NUMBER || SEPAY_BANK_ACCOUNT_ID || null;
   const bankName = SEPAY_BANK_NAME || null;
-  const paymentDescription = `Nhap dung noi dung: ${paymentContent}`;
-  const paymentInstruction =
-    "Chuyen khoan SePay va giu nguyen noi dung de he thong tu dong xac nhan";
+  const paymentDescription = isCodOrder
+    ? "Thanh toán khi nhận hàng"
+    : payAmount > 0
+      ? `Nhap dung noi dung: ${paymentContent}`
+      : "Khong can thanh toan truoc";
+  const paymentInstruction = isCodOrder
+    ? "Khach hang thanh toan khi nhan hang (COD)."
+    : payAmount > 0
+      ? "Chuyen khoan SePay va giu nguyen noi dung de he thong tu dong xac nhan"
+      : "Don hang khong co khoan thanh toan truoc. Phan con lai se thu theo COD neu co.";
 
   const paymentInstructions = {
-    method: PAYMENT_METHODS.SEPAY,
-    status: "PENDING_QR",
+    method: isCodOrder
+      ? PAYMENT_METHODS.COD
+      : quote.payNowMethod || PAYMENT_METHODS.SEPAY,
+    status: isCodOrder ? "PENDING_COD" : payAmount > 0 ? "PENDING_QR" : "PAID",
     amount: payAmount,
     currency: "VND",
     paymentCode: order.paymentCode,
@@ -117,12 +139,14 @@ exports.create = asyncHandler(async (req, res) => {
     bankAccountName: SEPAY_BANK_ACCOUNT_NAME || null,
     description: paymentDescription,
     instruction: paymentInstruction,
-    qrUrl: buildSepayQrUrl({
-      accountNumber: bankAccountNumber,
-      bankName,
-      amount: payAmount,
-      description: paymentContent,
-    }),
+    qrUrl: !isCodOrder && payAmount > 0
+      ? buildSepayQrUrl({
+          accountNumber: bankAccountNumber,
+          bankName,
+          amount: payAmount,
+          description: paymentContent,
+        })
+      : null,
   };
 
   ApiResponse.created(
@@ -146,6 +170,11 @@ exports.create = asyncHandler(async (req, res) => {
         total: quote.total,
         payNow: quote.payNow,
         payLater: quote.payLater,
+        paymentMethod: quote.paymentMethod,
+        payNowMethod: quote.payNowMethod,
+        payLaterMethod: quote.payLaterMethod,
+        shippingFeeMode: quote.shippingFeeMode,
+        shippingCollectionTiming: quote.shippingCollectionTiming,
       },
       voucherCode: order.voucherCode || null,
     },

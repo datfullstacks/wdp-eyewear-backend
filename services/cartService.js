@@ -6,6 +6,7 @@ const CART_TYPES = {
   READY_STOCK: 'ready_stock',
   PRE_ORDER: 'pre_order'
 };
+const SHIPPING_COLLECTION_TIMINGS = new Set(['upfront', 'with_balance', 'on_delivery']);
 
 const PRESCRIPTION_MODES = new Set(['none', 'manual', 'upload']);
 
@@ -107,6 +108,24 @@ function pickPrice(product, variant) {
   return Number(product?.pricing?.salePrice ?? product?.pricing?.basePrice ?? 0);
 }
 
+function normalizeShippingCollectionTiming(value, fallback = 'upfront') {
+  const normalized = String(value || '').trim().toLowerCase();
+  return SHIPPING_COLLECTION_TIMINGS.has(normalized) ? normalized : fallback;
+}
+
+function calcPaySplit(lineTotal, depositPercent) {
+  const normalizedLineTotal = Math.max(0, Number(lineTotal || 0));
+  const normalizedDepositPercent = Math.max(
+    0,
+    Math.min(100, Number.isFinite(Number(depositPercent)) ? Number(depositPercent) : 100)
+  );
+  const payNow = Math.round(normalizedLineTotal * (normalizedDepositPercent / 100));
+  return {
+    payNow,
+    payLater: Math.max(0, normalizedLineTotal - payNow),
+  };
+}
+
 function sumVariantStock(product) {
   const variants = Array.isArray(product?.variants) ? product.variants : [];
   return variants.reduce((sum, variant) => sum + Number(variant?.stock || 0), 0);
@@ -179,6 +198,13 @@ async function buildCartResponse(cartDoc) {
     const variant = variants.find((v) => String(v._id) === String(item.variantId || ''));
     const unitPrice = pickPrice(product, variant);
     const lineTotal = unitPrice * Number(item.quantity || 0);
+    const depositPercent = Boolean(item.preOrder)
+      ? Number(product?.preOrder?.depositPercent ?? 100)
+      : 100;
+    const paySplit = calcPaySplit(lineTotal, depositPercent);
+    const shippingCollectionTiming = Boolean(item.preOrder)
+      ? normalizeShippingCollectionTiming(product?.preOrder?.shippingCollectionTiming)
+      : 'upfront';
     return {
       _id: item._id,
       productId: product?._id || item.productId,
@@ -187,8 +213,17 @@ async function buildCartResponse(cartDoc) {
       variantId: item.variantId || null,
       quantity: item.quantity,
       preOrder: Boolean(item.preOrder),
+      depositPercent,
       unitPrice,
       lineTotal,
+      payNow: paySplit.payNow,
+      payLater: paySplit.payLater,
+      preOrderConfig: {
+        enabled: Boolean(item.preOrder),
+        allowCod: Boolean(product?.preOrder?.allowCod ?? true),
+        depositPercent,
+        shippingCollectionTiming,
+      },
       customization: item.customization || {}
     };
   });

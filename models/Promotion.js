@@ -47,6 +47,10 @@ const PromotionSchema = new Schema(
       enum: [...CART_TYPES, 'all'],
       default: 'all'
     },
+    applicableCategories: {
+      type: [String],
+      default: ['all']
+    },
     usageLimit: {
       type: Number,
       min: 0,

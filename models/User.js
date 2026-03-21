@@ -217,6 +217,27 @@ const refundAccountSchema = new mongoose.Schema({
     }
 }, { _id: false });
 
+const storeAccessSchema = new mongoose.Schema({
+    mode: {
+        type: String,
+        enum: ['all', 'selected'],
+        default: 'all'
+    },
+    primaryStoreId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Store',
+        default: null
+    },
+    storeIds: {
+        type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Store' }],
+        default: []
+    },
+    note: {
+        type: String,
+        default: ''
+    }
+}, { _id: false });
+
 const userSchema = new mongoose.Schema({
     name: {
         type: String,
@@ -247,6 +268,26 @@ const userSchema = new mongoose.Schema({
     },
     avatar: {
         type: String
+    },
+    phone: {
+        type: String,
+        default: ''
+    },
+    department: {
+        type: String,
+        default: ''
+    },
+    position: {
+        type: String,
+        default: ''
+    },
+    permissions: {
+        type: [String],
+        default: []
+    },
+    storeAccess: {
+        type: storeAccessSchema,
+        default: () => ({})
     },
     addresses: {
         type: [addressSchema],

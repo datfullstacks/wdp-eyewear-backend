@@ -62,8 +62,11 @@ const buildOrderPayment = (order) => {
   const method = String(order?.paymentMethod || "").toLowerCase();
   if (!method) return null;
 
+  const amount =
+    method === PAYMENT_METHODS.COD
+      ? Number(order?.payLaterTotal || order?.total || 0)
+      : Number(order?.payNowTotal || 0);
   const paymentCode = order?.paymentCode || null;
-  const amount = Number(order?.payNowTotal || 0);
   const basePayload = {
     method,
     status: order?.paymentStatus || null,
@@ -77,6 +80,16 @@ const buildOrderPayment = (order) => {
 
   if (method !== PAYMENT_METHODS.SEPAY) {
     return basePayload;
+  }
+
+  if (amount <= 0) {
+    return {
+      ...basePayload,
+      description: "Khong can thanh toan truoc",
+      instruction:
+        "Don hang khong co khoan thanh toan truoc. Phan con lai se thu theo COD neu co.",
+      qrUrl: null,
+    };
   }
 
   const bankAccountNumber =
@@ -111,6 +124,7 @@ exports.listOrders = asyncHandler(async (req, res) => {
     opsStage,
     refundStatus,
     userId,
+    storeId,
   } = req.query;
   const result = await orderService.listOrders(req.user, {
     page,
@@ -120,6 +134,7 @@ exports.listOrders = asyncHandler(async (req, res) => {
     opsStage,
     refundStatus,
     userId,
+    storeId,
   });
 
   ApiResponse.paginate(
@@ -138,6 +153,7 @@ exports.listMyOrders = asyncHandler(async (req, res) => {
     paymentStatus,
     opsStage,
     refundStatus,
+    storeId,
   } = req.query;
   const result = await orderService.listOrders(req.user, {
     page,
@@ -146,6 +162,7 @@ exports.listMyOrders = asyncHandler(async (req, res) => {
     paymentStatus,
     opsStage,
     refundStatus,
+    storeId,
   });
 
   ApiResponse.paginate(
@@ -172,6 +189,15 @@ exports.cancelOrder = asyncHandler(async (req, res) => {
     req.body,
   );
   ApiResponse.success(res, order, "Order cancelled");
+});
+
+exports.createRefundRequest = asyncHandler(async (req, res) => {
+  const order = await orderService.createRefundRequest(
+    req.params.id,
+    req.user,
+    req.body,
+  );
+  ApiResponse.created(res, order, "Refund request created");
 });
 
 exports.updateOrderItems = asyncHandler(async (req, res) => {
@@ -209,6 +235,15 @@ exports.updateRefundStatus = asyncHandler(async (req, res) => {
     req.body,
   );
   ApiResponse.success(res, order, "Order refund status updated");
+});
+
+exports.overrideRefund = asyncHandler(async (req, res) => {
+  const order = await orderService.overrideRefund(
+    req.params.id,
+    req.user,
+    req.body,
+  );
+  ApiResponse.success(res, order, "Order refund override applied");
 });
 
 exports.updateOrderStatus = asyncHandler(async (req, res) => {

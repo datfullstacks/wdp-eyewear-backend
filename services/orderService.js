@@ -1,7 +1,9 @@
 const Product = require("../models/Product");
 const Order = require("../models/Order");
+const Store = require("../models/Store");
 const User = require("../models/User");
 const Invoice = require("../models/Invoice");
+const { SystemConfig } = require("../models/SystemConfig");
 const AppError = require("../errors/AppError");
 const {
   PAYMENT_METHODS,
@@ -19,7 +21,12 @@ const {
   isManager,
   isAdmin,
   getUserId,
+  getRole,
 } = require("../helpers/roles");
+const {
+  getAccessibleStoreIds,
+  canAccessStore,
+} = require("../helpers/storeAccess");
 const { publishStatusChange } = require("../helpers/statusEvents");
 const { appendUserNotification } = require("../helpers/userNotification");
 const {
@@ -42,14 +49,62 @@ const PRESCRIPTION_MODES = new Set(["none", "manual", "upload"]);
 const REFUND_STATUSES = new Set([
   "none",
   "requested",
+  "reviewing",
+  "waiting_customer_info",
+  "escalated_to_manager",
+  "approved",
+  "return_pending",
+  "return_received",
   "processing",
   "completed",
   "rejected",
+]);
+const REFUND_RESPONSIBILITIES = new Set([
+  "customer",
+  "system",
+  "carrier",
+  "mixed",
+]);
+const REFUND_ACTIONS = Object.freeze({
+  START_REVIEW: "start_review",
+  CUSTOMER_SUBMIT_INFO: "customer_submit_info",
+  REQUEST_CUSTOMER_INFO: "request_customer_info",
+  APPROVE: "approve",
+  REJECT: "reject",
+  ESCALATE: "escalate",
+  MANAGER_APPROVE: "manager_approve",
+  MANAGER_REJECT: "manager_reject",
+  SEND_BACK_TO_STAFF: "send_back_to_staff",
+  MARK_RETURN_PENDING: "mark_return_pending",
+  CONFIRM_RETURN_RECEIVED: "confirm_return_received",
+  INSPECTION_FAILED: "inspection_failed",
+  START_PROCESSING: "start_processing",
+  COMPLETE: "complete",
+});
+const REFUND_ACTION_VALUES = new Set(Object.values(REFUND_ACTIONS));
+const DEFAULT_REFUND_WORKFLOW_SETTINGS = Object.freeze({
+  staffApprovalLimit: 300000,
+  requiresManagerForReturn: true,
+  requiresManagerForShippingRefund: true,
+  requirePayoutProof: false,
+});
+const REFUND_OVERRIDE_ACTIONS = new Set([
+  "reassign_sales",
+  "reassign_manager",
+  "reassign_operations",
+  "reset_reviewing",
+  "retry_customer_notification",
 ]);
 const CART_TYPES = {
   READY_STOCK: "ready_stock",
   PRE_ORDER: "pre_order",
 };
+const SHIPPING_COLLECTION_TIMINGS = new Set([
+  "upfront",
+  "with_balance",
+  "on_delivery",
+]);
+const SHIPPING_FEE_MODES = new Set(["exact", "estimated"]);
 const SHIPMENT_BOUND_OPS_STAGES = new Set([
   ORDER_OPS_STAGE.SHIPMENT_CREATED,
   ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
@@ -84,13 +139,105 @@ const READY_STOCK_CHECKLIST_KEYS = Object.freeze([
   "packageReady",
 ]);
 
-const ORDER_POPULATE = {
-  path: "invoiceId",
-  select: "invoiceCode status total paidAmount amountDue issuedAt paidAt",
-};
+const ORDER_POPULATE = [
+  {
+    path: "invoiceId",
+    select: "invoiceCode status total paidAmount amountDue issuedAt paidAt",
+  },
+  {
+    path: "storeId",
+    select:
+      "name code type status phone email addressLine1 ward district city openingHours supportsTryOn supportsPickup isDefault",
+  },
+];
 
 function isStaff(user) {
   return isBusinessUser(user);
+}
+
+function getOrderStoreId(order) {
+  return toTrimmedString(order?.storeId?._id || order?.storeId, "");
+}
+
+function isProductAvailableAtStore(product, storeId) {
+  const normalizedStoreId = toTrimmedString(storeId, "");
+  if (!normalizedStoreId) {
+    return true;
+  }
+
+  const mode =
+    String(product?.storeScope?.mode || "all").trim().toLowerCase() === "selected"
+      ? "selected"
+      : "all";
+  if (mode !== "selected") {
+    return true;
+  }
+
+  const storeIds = [
+    ...new Set(
+      [
+        product?.storeScope?.primaryStoreId,
+        ...(Array.isArray(product?.storeScope?.storeIds)
+          ? product.storeScope.storeIds
+          : []),
+      ]
+        .map((value) => toTrimmedString(value?._id || value, ""))
+        .filter(Boolean),
+    ),
+  ];
+
+  return storeIds.includes(normalizedStoreId);
+}
+
+async function resolveOrderStoreId({ requestedStoreId, currentUser }) {
+  const normalizedRequestedStoreId = toTrimmedString(requestedStoreId, "");
+  const actorStoreIds = getAccessibleStoreIds(currentUser);
+
+  if (normalizedRequestedStoreId) {
+    const exists = await Store.exists({ _id: normalizedRequestedStoreId });
+    if (!exists) {
+      throw new AppError("Store not found", 404);
+    }
+    if (
+      currentUser &&
+      isStaff(currentUser) &&
+      !canAccessStore(currentUser, normalizedRequestedStoreId)
+    ) {
+      throw new AppError("Forbidden", 403);
+    }
+    return normalizedRequestedStoreId;
+  }
+
+  if (!Array.isArray(actorStoreIds)) {
+    return null;
+  }
+
+  const preferredStoreId = toTrimmedString(
+    currentUser?.storeAccess?.primaryStoreId?._id ||
+      currentUser?.storeAccess?.primaryStoreId,
+    "",
+  );
+  if (preferredStoreId && actorStoreIds.includes(preferredStoreId)) {
+    return preferredStoreId;
+  }
+
+  return actorStoreIds.length === 1 ? actorStoreIds[0] : null;
+}
+
+function assertBusinessUserCanAccessOrder(order, currentUser) {
+  if (!currentUser || !isStaff(currentUser) || isAdmin(currentUser)) {
+    return;
+  }
+
+  const actorStoreIds = getAccessibleStoreIds(currentUser);
+  if (actorStoreIds === null) {
+    return;
+  }
+
+  const orderStoreId = getOrderStoreId(order);
+  if (!orderStoreId || !actorStoreIds.includes(orderStoreId)) {
+    throw new AppError("Forbidden", 403);
+  }
 }
 
 function normalizeNonNegativeNumber(value, fieldName) {
@@ -155,6 +302,35 @@ function normalizeOptionalDate(value, fieldName) {
   return date;
 }
 
+function normalizeOptionalUrl(value, fieldName) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return "";
+  const normalized = toTrimmedString(value, "");
+  if (!normalized) return "";
+  if (!/^https?:\/\//i.test(normalized)) {
+    throw new AppError(`${fieldName} must be a valid http(s) URL`, 400);
+  }
+  return normalized;
+}
+
+function normalizeUrlList(value, fieldName, { max = 6 } = {}) {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return [];
+  if (!Array.isArray(value)) {
+    throw new AppError(`${fieldName} must be an array`, 400);
+  }
+
+  const normalized = value
+    .map((item, index) => normalizeOptionalUrl(item, `${fieldName}[${index}]`))
+    .filter(Boolean);
+
+  if (normalized.length > max) {
+    throw new AppError(`${fieldName} supports at most ${max} URLs`, 400);
+  }
+
+  return normalized;
+}
+
 function normalizeOptionalEnum(value, allowedSet, fieldName) {
   if (value === undefined) return undefined;
   if (value === null || value === "") return null;
@@ -163,6 +339,468 @@ function normalizeOptionalEnum(value, allowedSet, fieldName) {
     throw new AppError(`${fieldName} is invalid`, 400);
   }
   return normalized;
+}
+
+function normalizeShippingCollectionTiming(value, fallback = "upfront") {
+  const normalized = toTrimmedString(value, "").toLowerCase();
+  return SHIPPING_COLLECTION_TIMINGS.has(normalized) ? normalized : fallback;
+}
+
+function normalizeShippingFeeMode(value, fallback = "estimated") {
+  const normalized = toTrimmedString(value, "").toLowerCase();
+  return SHIPPING_FEE_MODES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeRefundResponsibility(value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const normalized = toTrimmedString(value).toLowerCase();
+  if (!REFUND_RESPONSIBILITIES.has(normalized)) {
+    throw new AppError("refund responsibility is invalid", 400);
+  }
+  return normalized;
+}
+
+function normalizeRefundAction(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const normalized = toTrimmedString(value).toLowerCase();
+  return REFUND_ACTION_VALUES.has(normalized) ? normalized : null;
+}
+
+function buildRefundBreakdown({
+  itemAmount = 0,
+  shippingFeeAmount = 0,
+  returnShippingFeeAmount = 0,
+} = {}) {
+  const normalizedItemAmount = Number(itemAmount || 0);
+  const normalizedShippingFeeAmount = Number(shippingFeeAmount || 0);
+  const normalizedReturnShippingFeeAmount = Number(returnShippingFeeAmount || 0);
+  const total =
+    normalizedItemAmount +
+    normalizedShippingFeeAmount +
+    normalizedReturnShippingFeeAmount;
+
+  return {
+    itemAmount: normalizedItemAmount,
+    shippingFeeAmount: normalizedShippingFeeAmount,
+    returnShippingFeeAmount: normalizedReturnShippingFeeAmount,
+    total,
+  };
+}
+
+function normalizeRefundBreakdownInput(value, fieldName) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new AppError(`${fieldName} must be an object`, 400);
+  }
+
+  const itemAmount = normalizeNonNegativeNumber(
+    value.itemAmount ?? value.item_amount ?? 0,
+    `${fieldName}.itemAmount`,
+  );
+  const shippingFeeAmount = normalizeNonNegativeNumber(
+    value.shippingFeeAmount ?? value.shipping_fee_amount ?? 0,
+    `${fieldName}.shippingFeeAmount`,
+  );
+  const returnShippingFeeAmount = normalizeNonNegativeNumber(
+    value.returnShippingFeeAmount ?? value.return_shipping_fee_amount ?? 0,
+    `${fieldName}.returnShippingFeeAmount`,
+  );
+
+  return buildRefundBreakdown({
+    itemAmount,
+    shippingFeeAmount,
+    returnShippingFeeAmount,
+  });
+}
+
+function readRefundBreakdown(value) {
+  if (!value || typeof value !== "object") {
+    return buildRefundBreakdown();
+  }
+
+  return buildRefundBreakdown({
+    itemAmount: Number(value.itemAmount || 0),
+    shippingFeeAmount: Number(value.shippingFeeAmount || 0),
+    returnShippingFeeAmount: Number(value.returnShippingFeeAmount || 0),
+  });
+}
+
+function splitPaidAmountIntoRefundBreakdown(order, amount, includeShippingFee = false) {
+  const normalizedAmount = normalizeNonNegativeNumber(amount, "refund amount");
+  const shippingFeeAmount = includeShippingFee
+    ? Math.min(getRefundShippingFeeLimit(order), normalizedAmount)
+    : 0;
+
+  return buildRefundBreakdown({
+    itemAmount: Math.max(0, normalizedAmount - shippingFeeAmount),
+    shippingFeeAmount,
+    returnShippingFeeAmount: 0,
+  });
+}
+
+function resolveRequestedRefundBreakdown(order, payload = {}, defaultAmount = 0) {
+  const explicit = normalizeRefundBreakdownInput(
+    payload.requestedBreakdown || payload.requested_breakdown,
+    "requestedBreakdown",
+  );
+  if (explicit) {
+    return explicit;
+  }
+
+  const requestedItemAmount =
+    payload.amountRequested !== undefined || payload.amount_requested !== undefined
+      ? normalizeNonNegativeNumber(
+          payload.amountRequested ?? payload.amount_requested,
+          "amountRequested",
+        )
+      : Math.max(0, Number(defaultAmount || 0));
+  const includeShippingFee =
+    normalizeOptionalBoolean(payload.requestShippingFee, "requestShippingFee") ??
+    normalizeOptionalBoolean(payload.request_shipping_fee, "request_shipping_fee") ??
+    false;
+  const customerPaidReturnShippingFee =
+    payload.customerPaidReturnShippingFee !== undefined ||
+    payload.customer_paid_return_shipping_fee !== undefined
+      ? normalizeNonNegativeNumber(
+          payload.customerPaidReturnShippingFee ??
+            payload.customer_paid_return_shipping_fee,
+          "customerPaidReturnShippingFee",
+        )
+      : 0;
+  const shippingFeeAmount = includeShippingFee
+    ? getRefundShippingFeeLimit(order)
+    : 0;
+
+  return buildRefundBreakdown({
+    itemAmount: requestedItemAmount,
+    shippingFeeAmount,
+    returnShippingFeeAmount: customerPaidReturnShippingFee,
+  });
+}
+
+function resolveApprovedRefundBreakdown(order, payload = {}) {
+  const explicit = normalizeRefundBreakdownInput(
+    payload.approvedBreakdown || payload.approved_breakdown,
+    "approvedBreakdown",
+  );
+  if (explicit) {
+    return explicit;
+  }
+
+  const requestedBreakdown = readRefundBreakdown(order?.refund?.requestedBreakdown);
+  if (requestedBreakdown.total > 0) {
+    return requestedBreakdown;
+  }
+
+  return splitPaidAmountIntoRefundBreakdown(
+    order,
+    Number(order?.refund?.amount || 0),
+    false,
+  );
+}
+
+function assertRefundBreakdownEligibility(responsibility, breakdown) {
+  if (!breakdown) return;
+  if (
+    Number(breakdown.shippingFeeAmount || 0) > 0 &&
+    !["system", "carrier", "mixed"].includes(
+      normalizeRefundResponsibility(responsibility) || "customer",
+    )
+  ) {
+    throw new AppError(
+      "shipping fee refund is only allowed when responsibility is system, carrier, or mixed",
+      400,
+    );
+  }
+}
+
+function getRefundPaidAmountLimit(order) {
+  return Math.max(0, Number(order?.paidAmount || 0));
+}
+
+function getRefundShippingFeeLimit(order) {
+  const shippingCollectionTiming = normalizeShippingCollectionTiming(
+    order?.shippingCollectionTiming,
+    "upfront",
+  );
+  if (shippingCollectionTiming !== "upfront") {
+    return 0;
+  }
+  return Math.min(
+    Math.max(0, Number(order?.shippingFee || 0)),
+    getRefundPaidAmountLimit(order),
+  );
+}
+
+function getRefundPaidComponentTotal(breakdown) {
+  if (!breakdown || typeof breakdown !== "object") return 0;
+  return (
+    Math.max(0, Number(breakdown.itemAmount || 0)) +
+    Math.max(0, Number(breakdown.shippingFeeAmount || 0))
+  );
+}
+
+function assertRefundBreakdownAmountBounds(order, breakdown, fieldName) {
+  if (!breakdown) return;
+
+  const itemAmount = normalizeNonNegativeNumber(
+    breakdown.itemAmount ?? 0,
+    `${fieldName}.itemAmount`,
+  );
+  const shippingFeeAmount = normalizeNonNegativeNumber(
+    breakdown.shippingFeeAmount ?? 0,
+    `${fieldName}.shippingFeeAmount`,
+  );
+  const returnShippingFeeAmount = normalizeNonNegativeNumber(
+    breakdown.returnShippingFeeAmount ?? 0,
+    `${fieldName}.returnShippingFeeAmount`,
+  );
+  const paidComponentTotal = itemAmount + shippingFeeAmount;
+  const paidAmountLimit = getRefundPaidAmountLimit(order);
+  const shippingFeeLimit = getRefundShippingFeeLimit(order);
+
+  if (paidComponentTotal <= 0 && returnShippingFeeAmount <= 0) {
+    throw new AppError(`${fieldName}.total must be greater than 0`, 400);
+  }
+
+  if (shippingFeeAmount > shippingFeeLimit) {
+    throw new AppError(
+      `${fieldName}.shippingFeeAmount exceeds refundable shipping fee`,
+      400,
+    );
+  }
+
+  if (paidComponentTotal > paidAmountLimit) {
+    throw new AppError(
+      `${fieldName} exceeds refundable paid amount`,
+      400,
+    );
+  }
+}
+
+function assertRefundBreakdownNotAboveRequested(
+  requestedBreakdown,
+  nextBreakdown,
+  fieldName,
+) {
+  if (!nextBreakdown) return;
+
+  const requested = readRefundBreakdown(requestedBreakdown);
+  if (requested.total <= 0) return;
+
+  if (Number(nextBreakdown.itemAmount || 0) > Number(requested.itemAmount || 0)) {
+    throw new AppError(
+      `${fieldName}.itemAmount exceeds requested amount`,
+      400,
+    );
+  }
+
+  if (
+    Number(nextBreakdown.shippingFeeAmount || 0) >
+    Number(requested.shippingFeeAmount || 0)
+  ) {
+    throw new AppError(
+      `${fieldName}.shippingFeeAmount exceeds requested amount`,
+      400,
+    );
+  }
+
+  if (
+    Number(nextBreakdown.returnShippingFeeAmount || 0) >
+    Number(requested.returnShippingFeeAmount || 0)
+  ) {
+    throw new AppError(
+      `${fieldName}.returnShippingFeeAmount exceeds requested amount`,
+      400,
+    );
+  }
+}
+
+function shouldMarkOrderAsFullyRefunded(order, refund) {
+  const paidAmountLimit = getRefundPaidAmountLimit(order);
+  if (paidAmountLimit <= 0) return false;
+
+  const approvedBreakdown = readRefundBreakdown(refund?.approvedBreakdown);
+  const requestedBreakdown = readRefundBreakdown(refund?.requestedBreakdown);
+  const approvedPaidComponent = getRefundPaidComponentTotal(approvedBreakdown);
+  const paidComponentTotal =
+    approvedPaidComponent > 0
+      ? approvedPaidComponent
+      : getRefundPaidComponentTotal(requestedBreakdown);
+
+  return paidComponentTotal >= paidAmountLimit;
+}
+
+async function getRefundWorkflowSettings() {
+  const config = await SystemConfig.findOne({ key: "default" })
+    .select("refunds")
+    .lean();
+  const refunds = config?.refunds || {};
+
+  const staffApprovalLimit = Number(refunds.staffApprovalLimit);
+  return {
+    staffApprovalLimit: Number.isFinite(staffApprovalLimit)
+      ? Math.max(0, staffApprovalLimit)
+      : DEFAULT_REFUND_WORKFLOW_SETTINGS.staffApprovalLimit,
+    requiresManagerForReturn:
+      typeof refunds.requiresManagerForReturn === "boolean"
+        ? refunds.requiresManagerForReturn
+        : DEFAULT_REFUND_WORKFLOW_SETTINGS.requiresManagerForReturn,
+    requiresManagerForShippingRefund:
+      typeof refunds.requiresManagerForShippingRefund === "boolean"
+        ? refunds.requiresManagerForShippingRefund
+        : DEFAULT_REFUND_WORKFLOW_SETTINGS.requiresManagerForShippingRefund,
+    requirePayoutProof:
+      typeof refunds.requirePayoutProof === "boolean"
+        ? refunds.requirePayoutProof
+        : DEFAULT_REFUND_WORKFLOW_SETTINGS.requirePayoutProof,
+  };
+}
+
+function getRefundManagerApprovalReasons(
+  order,
+  refund,
+  settings = DEFAULT_REFUND_WORKFLOW_SETTINGS,
+) {
+  const reasons = [];
+  const targetBreakdown = readRefundBreakdown(
+    refund?.approvedBreakdown?.total ? refund.approvedBreakdown : refund?.requestedBreakdown,
+  );
+  const paidComponentTotal = getRefundPaidComponentTotal(targetBreakdown);
+
+  if (
+    Number(settings.staffApprovalLimit || 0) > 0 &&
+    paidComponentTotal > Number(settings.staffApprovalLimit || 0)
+  ) {
+    reasons.push(
+      `approved amount exceeds staff approval limit (${Number(
+        settings.staffApprovalLimit || 0,
+      )})`,
+    );
+  }
+
+  if (settings.requiresManagerForReturn && Boolean(refund?.requiresReturn)) {
+    reasons.push("return-required refunds must be approved by manager");
+  }
+
+  if (
+    settings.requiresManagerForShippingRefund &&
+    Number(targetBreakdown.shippingFeeAmount || 0) > 0
+  ) {
+    reasons.push("shipping fee refunds must be approved by manager");
+  }
+
+  return reasons;
+}
+
+function getRefundActorRole(currentUser, { isOwner = false } = {}) {
+  if (isOwner) return "customer";
+  if (isAdmin(currentUser)) return "admin";
+  if (isManager(currentUser)) return "manager";
+  if (isOperation(currentUser)) return "operations";
+  if (isStaffRole(currentUser)) return "sales";
+  const role = getRole(currentUser);
+  return role || "system";
+}
+
+function getRefundRoutingState(nextStatus, order) {
+  switch (nextStatus) {
+    case "requested":
+    case "reviewing":
+      return {
+        currentOwnerRole: "sales",
+        currentOwnerUserId: null,
+        nextActionCode: REFUND_ACTIONS.START_REVIEW,
+      };
+    case "waiting_customer_info":
+      return {
+        currentOwnerRole: "customer",
+        currentOwnerUserId: order?.userId || null,
+        nextActionCode: REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO,
+      };
+    case "escalated_to_manager":
+      return {
+        currentOwnerRole: "manager",
+        currentOwnerUserId: null,
+        nextActionCode: REFUND_ACTIONS.MANAGER_APPROVE,
+      };
+    case "approved":
+      return {
+        currentOwnerRole: "operations",
+        currentOwnerUserId: null,
+        nextActionCode: Boolean(order?.refund?.requiresReturn)
+          ? REFUND_ACTIONS.MARK_RETURN_PENDING
+          : REFUND_ACTIONS.START_PROCESSING,
+      };
+    case "return_pending":
+      return {
+        currentOwnerRole: "operations",
+        currentOwnerUserId: null,
+        nextActionCode: REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED,
+      };
+    case "return_received":
+      return {
+        currentOwnerRole: "operations",
+        currentOwnerUserId: null,
+        nextActionCode: REFUND_ACTIONS.START_PROCESSING,
+      };
+    case "processing":
+      return {
+        currentOwnerRole: "operations",
+        currentOwnerUserId: null,
+        nextActionCode: REFUND_ACTIONS.COMPLETE,
+      };
+    default:
+      return {
+        currentOwnerRole: "none",
+        currentOwnerUserId: null,
+        nextActionCode: "",
+      };
+  }
+}
+
+function applyRefundRoutingState(order, nextStatus) {
+  if (!order.refund || typeof order.refund !== "object") {
+    order.refund = {};
+  }
+
+  const routing = getRefundRoutingState(nextStatus, order);
+  order.refund.currentOwnerRole = routing.currentOwnerRole;
+  order.refund.currentOwnerUserId = routing.currentOwnerUserId;
+  order.refund.nextActionCode = routing.nextActionCode;
+}
+
+function buildRefundHistoryEntry({
+  action,
+  fromStatus,
+  toStatus,
+  currentUser,
+  note = "",
+  meta = null,
+  isOwner = false,
+}) {
+  return {
+    action: toTrimmedString(action, ""),
+    fromStatus: toTrimmedString(fromStatus, "none"),
+    toStatus: toTrimmedString(toStatus, "none"),
+    actorUserId: getUserId(currentUser) || null,
+    actorRole: getRefundActorRole(currentUser, { isOwner }),
+    actorName: toDisplayName(currentUser, isOwner ? "Customer" : "System"),
+    note: toTrimmedString(note, ""),
+    meta: meta && typeof meta === "object" ? meta : null,
+    createdAt: new Date(),
+  };
+}
+
+function appendRefundHistory(order, entry) {
+  if (!order.refund || typeof order.refund !== "object") {
+    order.refund = {};
+  }
+
+  const history = Array.isArray(order.refund.history) ? [...order.refund.history] : [];
+  history.push(entry);
+  order.refund.history = history;
+  order.markModified("refund.history");
 }
 
 function ensureOpsExecution(order) {
@@ -597,16 +1235,176 @@ function publishOpsStageChange(order, previousOpsStage, currentUser) {
   });
 }
 
-function assertRefundStatusPermission(currentUser, nextStatus) {
-  if (isAdmin(currentUser) || isManager(currentUser)) {
+function assertRefundActionPermission(currentUser, action, options = {}) {
+  if (options.isOwner && action === REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO) {
     return;
   }
 
-  if (isOperation(currentUser) && nextStatus === "processing") {
+  if (isAdmin(currentUser)) {
+    return;
+  }
+
+  const staffActions = new Set([
+    REFUND_ACTIONS.START_REVIEW,
+    REFUND_ACTIONS.REQUEST_CUSTOMER_INFO,
+    REFUND_ACTIONS.APPROVE,
+    REFUND_ACTIONS.REJECT,
+    REFUND_ACTIONS.ESCALATE,
+    REFUND_ACTIONS.MARK_RETURN_PENDING,
+  ]);
+  const managerActions = new Set([
+    REFUND_ACTIONS.MANAGER_APPROVE,
+    REFUND_ACTIONS.MANAGER_REJECT,
+    REFUND_ACTIONS.SEND_BACK_TO_STAFF,
+    REFUND_ACTIONS.MARK_RETURN_PENDING,
+  ]);
+  const operationActions = new Set([
+    REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED,
+    REFUND_ACTIONS.INSPECTION_FAILED,
+    REFUND_ACTIONS.START_PROCESSING,
+    REFUND_ACTIONS.COMPLETE,
+  ]);
+
+  if (isStaffRole(currentUser) && staffActions.has(action)) {
+    return;
+  }
+
+  if (isManager(currentUser) && managerActions.has(action)) {
+    return;
+  }
+
+  if (isOperation(currentUser) && operationActions.has(action)) {
     return;
   }
 
   throw new AppError("Forbidden", 403);
+}
+
+function getRefundActionTargetStatus(action) {
+  switch (action) {
+    case REFUND_ACTIONS.START_REVIEW:
+    case REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO:
+    case REFUND_ACTIONS.SEND_BACK_TO_STAFF:
+      return "reviewing";
+    case REFUND_ACTIONS.REQUEST_CUSTOMER_INFO:
+      return "waiting_customer_info";
+    case REFUND_ACTIONS.APPROVE:
+    case REFUND_ACTIONS.MANAGER_APPROVE:
+      return "approved";
+    case REFUND_ACTIONS.REJECT:
+    case REFUND_ACTIONS.MANAGER_REJECT:
+      return "rejected";
+    case REFUND_ACTIONS.ESCALATE:
+      return "escalated_to_manager";
+    case REFUND_ACTIONS.MARK_RETURN_PENDING:
+      return "return_pending";
+    case REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED:
+      return "return_received";
+    case REFUND_ACTIONS.INSPECTION_FAILED:
+      return "reviewing";
+    case REFUND_ACTIONS.START_PROCESSING:
+      return "processing";
+    case REFUND_ACTIONS.COMPLETE:
+      return "completed";
+    default:
+      return null;
+  }
+}
+
+function assertRefundActionTransition(currentStatus, action, requiresReturn) {
+  const transitionMatrix = {
+    [REFUND_ACTIONS.START_REVIEW]: ["requested", "waiting_customer_info"],
+    [REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO]: ["waiting_customer_info"],
+    [REFUND_ACTIONS.REQUEST_CUSTOMER_INFO]: ["requested", "reviewing"],
+    [REFUND_ACTIONS.APPROVE]: ["requested", "reviewing"],
+    [REFUND_ACTIONS.REJECT]: ["requested", "reviewing", "waiting_customer_info"],
+    [REFUND_ACTIONS.ESCALATE]: ["requested", "reviewing"],
+    [REFUND_ACTIONS.MANAGER_APPROVE]: ["escalated_to_manager"],
+    [REFUND_ACTIONS.MANAGER_REJECT]: ["escalated_to_manager"],
+    [REFUND_ACTIONS.SEND_BACK_TO_STAFF]: ["escalated_to_manager"],
+    [REFUND_ACTIONS.MARK_RETURN_PENDING]: ["approved"],
+    [REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED]: ["return_pending"],
+    [REFUND_ACTIONS.INSPECTION_FAILED]: ["return_pending", "return_received"],
+    [REFUND_ACTIONS.START_PROCESSING]: ["approved", "return_received"],
+    [REFUND_ACTIONS.COMPLETE]: ["processing"],
+  };
+
+  const allowedCurrentStatuses = transitionMatrix[action] || [];
+  if (!allowedCurrentStatuses.includes(currentStatus)) {
+    throw new AppError(
+      `Refund action "${action}" is not allowed from status "${currentStatus}"`,
+      400,
+    );
+  }
+
+  if (
+    action === REFUND_ACTIONS.START_PROCESSING &&
+    requiresReturn &&
+    currentStatus !== "return_received"
+  ) {
+    throw new AppError(
+      "Refund that requires return must be marked return_received before processing",
+      400,
+    );
+  }
+}
+
+function mapLegacyRefundStatusToAction(currentUser, nextStatus) {
+  switch (nextStatus) {
+    case "reviewing":
+      return REFUND_ACTIONS.START_REVIEW;
+    case "waiting_customer_info":
+      return REFUND_ACTIONS.REQUEST_CUSTOMER_INFO;
+    case "approved":
+      return isManager(currentUser)
+        ? REFUND_ACTIONS.MANAGER_APPROVE
+        : REFUND_ACTIONS.APPROVE;
+    case "escalated_to_manager":
+      return REFUND_ACTIONS.ESCALATE;
+    case "return_pending":
+      return REFUND_ACTIONS.MARK_RETURN_PENDING;
+    case "return_received":
+      return REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED;
+    case "processing":
+      return REFUND_ACTIONS.START_PROCESSING;
+    case "completed":
+      return REFUND_ACTIONS.COMPLETE;
+    case "rejected":
+      return isManager(currentUser)
+        ? REFUND_ACTIONS.MANAGER_REJECT
+        : REFUND_ACTIONS.REJECT;
+    default:
+      return null;
+  }
+}
+
+function shouldRefreshRequestedRefundBreakdown(payload = {}) {
+  return (
+    payload.requestedBreakdown !== undefined ||
+    payload.requested_breakdown !== undefined ||
+    payload.amountRequested !== undefined ||
+    payload.amount_requested !== undefined ||
+    payload.requestShippingFee !== undefined ||
+    payload.request_shipping_fee !== undefined ||
+    payload.customerPaidReturnShippingFee !== undefined ||
+    payload.customer_paid_return_shipping_fee !== undefined
+  );
+}
+
+function resolveCustomerRequestedRefundBreakdown(order, payload = {}) {
+  const currentRequestedBreakdown = readRefundBreakdown(
+    order?.refund?.requestedBreakdown,
+  );
+  if (!shouldRefreshRequestedRefundBreakdown(payload)) {
+    return currentRequestedBreakdown;
+  }
+
+  return resolveRequestedRefundBreakdown(
+    order,
+    payload,
+    currentRequestedBreakdown.itemAmount ||
+      Math.max(0, Number(order?.refund?.amount || 0)),
+  );
 }
 
 function pickVariant(product, variantId) {
@@ -626,6 +1424,29 @@ function pickPrice(product, variant) {
   const fallback = product?.pricing?.salePrice ?? product?.pricing?.basePrice;
   if (fallback == null) return null;
   return Number(fallback);
+}
+
+function normalizeCheckoutPaymentMethod(
+  value,
+  fallback = PAYMENT_METHODS.SEPAY,
+) {
+  const normalized = toTrimmedString(value, fallback).toLowerCase();
+  if (
+    normalized === PAYMENT_METHODS.SEPAY ||
+    normalized === PAYMENT_METHODS.COD
+  ) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function forceItemsToCod(items = []) {
+  return (Array.isArray(items) ? items : []).map((item) => ({
+    ...item,
+    depositPercent: 0,
+    payNow: 0,
+    payLater: Math.max(0, Math.round(Number(item?.lineTotal || 0))),
+  }));
 }
 
 function buildProductShippingMeta(product) {
@@ -654,6 +1475,12 @@ function buildProductShippingMeta(product) {
     ),
     widthCm: Math.max(12, Math.ceil(frameWidthMm / 10)),
     heightCm: Math.max(6, Math.ceil(lensHeightMm / 10)),
+    collectionTiming: Boolean(product?.preOrder?.enabled)
+      ? normalizeShippingCollectionTiming(
+          product?.preOrder?.shippingCollectionTiming,
+          "upfront",
+        )
+      : "upfront",
   };
 }
 
@@ -675,9 +1502,168 @@ function sumVariantStock(product) {
 
 function calcPaySplit(unitPrice, quantity, depositPercent) {
   const lineTotal = unitPrice * quantity;
-  const payNow = Math.round(lineTotal * (depositPercent / 100));
-  const payLater = lineTotal - payNow;
-  return { lineTotal, payNow, payLater };
+  return {
+    lineTotal,
+    ...calcPaySplitFromLineTotal(lineTotal, depositPercent),
+  };
+}
+
+function calcPaySplitFromLineTotal(lineTotal, depositPercent) {
+  const normalizedLineTotal = Math.max(0, Number(lineTotal || 0));
+  const normalizedDepositPercent = Math.max(
+    0,
+    Math.min(
+      100,
+      Number.isFinite(Number(depositPercent)) ? Number(depositPercent) : 100,
+    ),
+  );
+  const payNow = Math.round(
+    normalizedLineTotal * (normalizedDepositPercent / 100),
+  );
+  const payLater = Math.max(0, normalizedLineTotal - payNow);
+  return { lineTotal: normalizedLineTotal, payNow, payLater };
+}
+
+function allocateAmountProportionally(totalAmount, weights = []) {
+  const normalizedTotal = Math.max(0, Math.round(Number(totalAmount || 0)));
+  const safeWeights = (Array.isArray(weights) ? weights : []).map((weight) =>
+    Math.max(0, Number(weight || 0)),
+  );
+  const weightSum = safeWeights.reduce((sum, weight) => sum + weight, 0);
+
+  if (normalizedTotal <= 0 || weightSum <= 0 || safeWeights.length === 0) {
+    return safeWeights.map(() => 0);
+  }
+
+  const provisional = safeWeights.map((weight, index) => {
+    const exact = (normalizedTotal * weight) / weightSum;
+    const floor = Math.floor(exact);
+    return {
+      index,
+      floor,
+      remainder: exact - floor,
+    };
+  });
+
+  const allocations = provisional.map((item) => item.floor);
+  let remainder = normalizedTotal - allocations.reduce((sum, value) => sum + value, 0);
+
+  provisional
+    .sort((a, b) => {
+      if (b.remainder !== a.remainder) {
+        return b.remainder - a.remainder;
+      }
+      return a.index - b.index;
+    })
+    .forEach((item) => {
+      if (remainder <= 0) return;
+      allocations[item.index] += 1;
+      remainder -= 1;
+    });
+
+  return allocations;
+}
+
+function applyDiscountToItems(items = [], discountAmount = 0) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const subtotal = safeItems.reduce(
+    (sum, item) => sum + Math.max(0, Number(item?.lineTotal || 0)),
+    0,
+  );
+  const appliedDiscountAmount = Math.min(
+    Math.max(0, Math.round(Number(discountAmount || 0))),
+    Math.max(0, Math.round(subtotal)),
+  );
+
+  if (appliedDiscountAmount <= 0 || safeItems.length === 0) {
+    return {
+      items: safeItems.map((item) => ({ ...item })),
+      discountAmount: 0,
+    };
+  }
+
+  const allocatedDiscounts = allocateAmountProportionally(
+    appliedDiscountAmount,
+    safeItems.map((item) => item.lineTotal || 0),
+  );
+
+  return {
+    items: safeItems.map((item, index) => {
+      const discountedLineTotal = Math.max(
+        0,
+        Math.round(Number(item.lineTotal || 0)) - allocatedDiscounts[index],
+      );
+      const split = calcPaySplitFromLineTotal(
+        discountedLineTotal,
+        item.depositPercent,
+      );
+
+      return {
+        ...item,
+        payNow: split.payNow,
+        payLater: split.payLater,
+      };
+    }),
+    discountAmount: appliedDiscountAmount,
+  };
+}
+
+function resolveOrderShippingCollectionTiming(items = []) {
+  const preorderTimings = Array.from(
+    new Set(
+      (Array.isArray(items) ? items : [])
+        .filter((item) => Boolean(item?.preOrder))
+        .map((item) =>
+          normalizeShippingCollectionTiming(
+            item?.shippingMeta?.collectionTiming,
+            "upfront",
+          ),
+        ),
+    ),
+  );
+
+  if (preorderTimings.length > 1) {
+    throw new AppError(
+      "Pre-order items in the same order must share the same shipping collection timing",
+      400,
+    );
+  }
+
+  return preorderTimings[0] || "upfront";
+}
+
+function resolveShippingLegTotals(shippingFee, shippingCollectionTiming) {
+  const normalizedShippingFee = Math.max(0, Number(shippingFee || 0));
+  const normalizedTiming = normalizeShippingCollectionTiming(
+    shippingCollectionTiming,
+    "upfront",
+  );
+
+  if (normalizedTiming === "upfront") {
+    return {
+      shippingPayNow: normalizedShippingFee,
+      shippingPayLater: 0,
+    };
+  }
+
+  return {
+    shippingPayNow: 0,
+    shippingPayLater: normalizedShippingFee,
+  };
+}
+
+function applyQuoteResultToOrder(order, quoteResult) {
+  order.items = quoteResult.items;
+  order.subtotal = quoteResult.subtotal;
+  order.shippingFee = quoteResult.shippingFee;
+  order.discountAmount = quoteResult.discountAmount;
+  order.total = quoteResult.total;
+  order.payNowTotal = quoteResult.payNowTotal;
+  order.payLaterTotal = quoteResult.payLaterTotal;
+  order.payLaterMethod = quoteResult.payLaterMethod || null;
+  order.shippingCollectionTiming = quoteResult.shippingCollectionTiming || "upfront";
+  order.shippingFeeMode = quoteResult.shippingFeeMode || "estimated";
+  order.voucherCode = quoteResult.voucherCode || "";
 }
 
 function normalizeEye(eye = {}, fallback = "0") {
@@ -811,7 +1797,7 @@ async function buildItems(itemsInput, options = {}) {
 
     const quantity = normalizePositiveInteger(input.quantity, "quantity");
     const product = await Product.findById(productId).select(
-      "_id name type status pricing preOrder inventory variants specs",
+      "_id name type status pricing preOrder inventory variants specs storeScope",
     );
     if (!product) {
       throw new AppError("Product not found", 404);
@@ -820,6 +1806,13 @@ async function buildItems(itemsInput, options = {}) {
     if (product.status !== PRODUCT_STATUS.ACTIVE) {
       throw new AppError(
         `Product "${product.name}" is not available for sale`,
+        400,
+      );
+    }
+
+    if (!isProductAvailableAtStore(product, options.storeId)) {
+      throw new AppError(
+        `Product "${product.name}" is not available at the selected store`,
         400,
       );
     }
@@ -1263,12 +2256,18 @@ async function quote(
     discountAmount,
     "discountAmount",
   );
+  const resolvedStoreId = await resolveOrderStoreId({
+    requestedStoreId: options.storeId,
+    currentUser: options.currentUser,
+  });
 
   const items = await buildItems(itemsInput, {
     cartType: options.cartType || null,
+    storeId: resolvedStoreId,
   });
-  const { subtotal, payNowTotal, payLaterTotal } = sumAmounts(items);
+  const { subtotal } = sumAmounts(items);
   const voucherCode = normalizeVoucherCode(options.voucherCode || null);
+  const shippingCollectionTiming = resolveOrderShippingCollectionTiming(items);
   const normalizedShippingMethod = toTrimmedString(
     options.shippingMethod || "standard",
     "standard",
@@ -1302,31 +2301,84 @@ async function quote(
     appliedVoucherCode = resolvedPromotion.voucherCode;
   }
 
+  discountValue = Math.min(
+    subtotal,
+    normalizeNonNegativeNumber(discountValue, "discountAmount"),
+  );
+
   const canCalculateDynamicShipping =
     normalizedShippingAddress?.districtId &&
     normalizedShippingAddress?.wardCode &&
     normalizedShippingMethod;
 
-  if (canCalculateDynamicShipping) {
-    shippingQuote = await shippingQuoteService.quoteShipping({
-      items,
-      shippingAddress: normalizedShippingAddress,
-      shippingMethod: normalizedShippingMethod,
-      subtotal,
-    });
-    shippingQuote.shippingSource = "ghn";
-  }
+    if (canCalculateDynamicShipping) {
+      shippingQuote = await shippingQuoteService.quoteShipping({
+        items,
+        shippingAddress: normalizedShippingAddress,
+        shippingMethod: normalizedShippingMethod,
+        subtotal,
+        storeId: resolvedStoreId || null,
+      });
+      shippingQuote.shippingSource = "ghn";
+    }
 
   const shippingFeeValue = normalizeNonNegativeNumber(
     shippingQuote.shippingFee,
     "shippingFee",
   );
-  const total = subtotal - discountValue + shippingFeeValue;
-  const payNow = Math.max(0, payNowTotal - discountValue + shippingFeeValue);
-  const payLater = Math.max(0, total - payNow);
+  const shippingFeeMode = normalizeShippingFeeMode(
+    shippingQuote.shippingSource === "ghn" ? "exact" : "estimated",
+    "estimated",
+  );
+  const discounted = applyDiscountToItems(items, discountValue);
+  const {
+    payNowTotal: discountedProductPayNowTotal,
+    payLaterTotal: discountedProductPayLaterTotal,
+  } = sumAmounts(discounted.items);
+  const { shippingPayNow, shippingPayLater } = resolveShippingLegTotals(
+    shippingFeeValue,
+    shippingCollectionTiming,
+  );
+  const total = subtotal - discounted.discountAmount + shippingFeeValue;
+  const requestedPaymentMethod = normalizeCheckoutPaymentMethod(
+    options.paymentMethod,
+    PAYMENT_METHODS.SEPAY,
+  );
+  const hasPreOrderItems = items.some((item) => Boolean(item?.preOrder));
+  let effectiveItems = discounted.items;
+  let effectiveShippingCollectionTiming = shippingCollectionTiming;
+  let payNowTotal = Math.max(
+    0,
+    discountedProductPayNowTotal + shippingPayNow,
+  );
+  let payLaterTotal = Math.max(
+    0,
+    discountedProductPayLaterTotal + shippingPayLater,
+  );
+  let payNowMethod = payNowTotal > 0 ? PAYMENT_METHODS.SEPAY : null;
+  let payLaterMethod = payLaterTotal > 0 ? PAYMENT_METHODS.COD : null;
+  let paymentMethod = payNowMethod || payLaterMethod || requestedPaymentMethod;
+
+  if (requestedPaymentMethod === PAYMENT_METHODS.COD) {
+    if (hasPreOrderItems) {
+      throw new AppError(
+        "COD is only available for ready-stock orders. Pre-order orders still require upfront payment.",
+        400,
+      );
+    }
+
+    effectiveItems = forceItemsToCod(discounted.items);
+    effectiveShippingCollectionTiming = "on_delivery";
+    payNowTotal = 0;
+    payLaterTotal = Math.max(0, total);
+    payNowMethod = null;
+    payLaterMethod = payLaterTotal > 0 ? PAYMENT_METHODS.COD : null;
+    paymentMethod = PAYMENT_METHODS.COD;
+  }
 
   return {
-    items: stripItemShippingMeta(items),
+    items: stripItemShippingMeta(effectiveItems),
+    storeId: resolvedStoreId || null,
     subtotal,
     shippingFee: shippingFeeValue,
     shippingMethod: shippingQuote.shippingMethod || normalizedShippingMethod,
@@ -1334,12 +2386,17 @@ async function quote(
     shippingSource: shippingQuote.shippingSource,
     shippingPackage: shippingQuote.packageMetrics,
     shippingOrigin: shippingQuote.originStore,
-    discountAmount: discountValue,
+    shippingFeeMode,
+    shippingCollectionTiming: effectiveShippingCollectionTiming,
+    discountAmount: discounted.discountAmount,
     total,
-    payNow,
-    payLater,
+    payNow: payNowTotal,
+    payLater: payLaterTotal,
     payNowTotal,
     payLaterTotal,
+    paymentMethod,
+    payNowMethod,
+    payLaterMethod,
     voucherCode: appliedVoucherCode,
     promotion,
   };
@@ -1354,13 +2411,15 @@ async function createOrder({
   shippingAddress,
   note,
   cartType = null,
+  paymentMethod = PAYMENT_METHODS.SEPAY,
   voucherCode = null,
+  storeId = null,
 }) {
   if (!userId) {
     throw new AppError("Unauthorized", 401);
   }
 
-  const user = await User.findById(userId).select("_id addresses");
+  const user = await User.findById(userId).select("_id addresses role storeAccess");
   if (!user) {
     throw new AppError("User not found", 404);
   }
@@ -1371,13 +2430,23 @@ async function createOrder({
 
   const quoteResult = await quote(itemsInput, shippingFee, discountAmount, {
     cartType,
+    paymentMethod,
     voucherCode,
     shippingMethod,
     shippingAddress: resolvedShippingAddress,
+    storeId,
+    currentUser: user,
   });
+  const selectedPaymentMethod = normalizeCheckoutPaymentMethod(
+    quoteResult.paymentMethod,
+    PAYMENT_METHODS.SEPAY,
+  );
   const paymentCode = generatePaymentCode();
   const orderType = inferOrderType(quoteResult.items);
-  const paidAt = quoteResult.payNow > 0 ? null : new Date();
+  const paidAt =
+    selectedPaymentMethod === PAYMENT_METHODS.COD || quoteResult.payNowTotal > 0
+      ? null
+      : new Date();
   const confirmationDeadlineHours = 12;
   const editWindowEndsAt = paidAt
     ? addHours(paidAt, confirmationDeadlineHours)
@@ -1385,20 +2454,34 @@ async function createOrder({
 
   const order = await Order.create({
     userId,
+    storeId: quoteResult.storeId || null,
     items: quoteResult.items,
     subtotal: quoteResult.subtotal,
     shippingFee: quoteResult.shippingFee,
     discountAmount: quoteResult.discountAmount,
     total: quoteResult.total,
-    payNowTotal: quoteResult.payNow,
-    payLaterTotal: quoteResult.payLater,
-    paymentMethod: PAYMENT_METHODS.SEPAY,
-    paymentStatus: quoteResult.payNow > 0 ? "pending" : "paid",
-    paidAmount: quoteResult.payNow > 0 ? 0 : quoteResult.payNow,
+    payNowTotal: quoteResult.payNowTotal,
+    payLaterTotal: quoteResult.payLaterTotal,
+    payLaterMethod: quoteResult.payLaterMethod || null,
+    paymentMethod: selectedPaymentMethod,
+    paymentStatus:
+      selectedPaymentMethod === PAYMENT_METHODS.COD
+        ? "pending"
+        : quoteResult.payNowTotal > 0
+          ? "pending"
+          : "paid",
+    paidAmount:
+      selectedPaymentMethod === PAYMENT_METHODS.COD
+        ? 0
+        : quoteResult.payNowTotal > 0
+          ? 0
+          : quoteResult.payNowTotal,
     paidAt: paidAt || undefined,
     editWindowEndsAt: editWindowEndsAt || undefined,
     confirmationDeadlineHours,
     shippingMethod: quoteResult.shippingMethod || shippingMethod,
+    shippingCollectionTiming: quoteResult.shippingCollectionTiming || "upfront",
+    shippingFeeMode: quoteResult.shippingFeeMode || "estimated",
     shippingAddress: resolvedShippingAddress,
     voucherCode: quoteResult.voucherCode || undefined,
     note,
@@ -1488,6 +2571,10 @@ async function getOrderById(id, currentUser) {
     throw new AppError("Forbidden", 403);
   }
 
+  if (!isOwner) {
+    assertBusinessUserCanAccessOrder(order, currentUser);
+  }
+
   return order;
 }
 
@@ -1500,6 +2587,10 @@ async function updateOrderItems(id, currentUser, payload = {}) {
   const staff = isStaff(currentUser);
   if (!isOwner && !staff) {
     throw new AppError("Forbidden", 403);
+  }
+
+  if (!isOwner) {
+    assertBusinessUserCanAccessOrder(order, currentUser);
   }
 
   if (!staff) {
@@ -1544,9 +2635,12 @@ async function updateOrderItems(id, currentUser, payload = {}) {
       : CART_TYPES.READY_STOCK;
   const quoteResult = await quote(itemsInput, shippingFee, discountAmount, {
     cartType,
+    paymentMethod: order.paymentMethod || PAYMENT_METHODS.SEPAY,
     voucherCode,
     shippingMethod: nextShippingMethod,
     shippingAddress: nextShippingAddress,
+    storeId: order.storeId || null,
+    currentUser,
   });
   const nextOrderType = inferOrderType(quoteResult.items);
   if (nextOrderType !== order.orderType) {
@@ -1556,14 +2650,7 @@ async function updateOrderItems(id, currentUser, payload = {}) {
     );
   }
 
-  order.items = quoteResult.items;
-  order.subtotal = quoteResult.subtotal;
-  order.shippingFee = quoteResult.shippingFee;
-  order.discountAmount = quoteResult.discountAmount;
-  order.total = quoteResult.total;
-  order.payNowTotal = quoteResult.payNow;
-  order.payLaterTotal = quoteResult.payLater;
-  order.voucherCode = quoteResult.voucherCode || "";
+  applyQuoteResultToOrder(order, quoteResult);
   if (payload.shippingMethod || payload.shipping_method) {
     order.shippingMethod = quoteResult.shippingMethod || nextShippingMethod;
   }
@@ -1578,13 +2665,21 @@ async function updateOrderItems(id, currentUser, payload = {}) {
 
   const paidAmount = Number(order.paidAmount || 0);
   if (paidAmount <= 0) {
-    order.paymentStatus = quoteResult.payNow > 0 ? "pending" : "paid";
+    order.paymentStatus =
+      normalizeCheckoutPaymentMethod(order.paymentMethod) === PAYMENT_METHODS.COD
+        ? "pending"
+        : quoteResult.payNowTotal > 0
+          ? "pending"
+          : "paid";
     if (order.paymentStatus === "paid" && !order.paidAt) {
       order.paidAt = new Date();
       order.editWindowEndsAt = addHours(
         order.paidAt,
         Number(order.confirmationDeadlineHours || 12),
       );
+    } else if (order.paymentStatus === "pending") {
+      order.paidAt = undefined;
+      order.editWindowEndsAt = undefined;
     }
   } else {
     if (paidAmount >= Number(order.payNowTotal || 0)) {
@@ -1606,16 +2701,39 @@ async function updateOrderItems(id, currentUser, payload = {}) {
       if (refundableAmount > 0) {
         const owner = await User.findById(order.userId).select("refundAccount");
         const account = normalizeRefundBankAccount(owner?.refundAccount);
-        order.refund = {
-          ...(order.refund || {}),
-          status: "requested",
-          reason:
-            "Order updated after payment - overpaid amount requires refund",
-          requestedAt: new Date(),
-          requestedBy: userId || order.userId,
-          amount: refundableAmount,
-          bankAccount: account || order.refund?.bankAccount || undefined,
-        };
+        const previousRefundStatus = order.refund?.status || "none";
+        order.refund = buildRefundRequestState(
+          order,
+          currentUser,
+          {
+            reason:
+              "Order updated after payment - overpaid amount requires refund",
+          },
+          {
+            defaultAmount: refundableAmount,
+            requestedBreakdown: buildRefundBreakdown({
+              itemAmount: refundableAmount,
+              shippingFeeAmount: 0,
+              returnShippingFeeAmount: 0,
+            }),
+            bankAccount: account || order.refund?.bankAccount || undefined,
+            responsibility: "system",
+          },
+        );
+        appendRefundHistory(
+          order,
+          buildRefundHistoryEntry({
+            action: "create_request",
+            fromStatus: previousRefundStatus,
+            toStatus: order.refund?.status || "requested",
+            currentUser,
+            note: "Auto-created refund request for overpaid amount.",
+            meta: {
+              amount: refundableAmount,
+              source: "order_update_overpaid",
+            },
+          }),
+        );
       }
     } else {
       order.paymentStatus = "partial";
@@ -1643,6 +2761,10 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
   const staff = isStaff(currentUser);
   if (!isOwner && !staff) {
     throw new AppError("Forbidden", 403);
+  }
+
+  if (!isOwner) {
+    assertBusinessUserCanAccessOrder(order, currentUser);
   }
 
   if (!staff) {
@@ -1713,9 +2835,12 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
 
   const quoteResult = await quote(existingItems, shippingFee, discountAmount, {
     cartType,
+    paymentMethod: order.paymentMethod || PAYMENT_METHODS.SEPAY,
     voucherCode,
     shippingMethod: order.shippingMethod || "standard",
     shippingAddress: order.shippingAddress || null,
+    storeId: order.storeId || null,
+    currentUser,
   });
 
   const nextOrderType = inferOrderType(quoteResult.items);
@@ -1726,24 +2851,25 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
     );
   }
 
-  order.items = quoteResult.items;
-  order.subtotal = quoteResult.subtotal;
-  order.shippingFee = quoteResult.shippingFee;
-  order.discountAmount = quoteResult.discountAmount;
-  order.total = quoteResult.total;
-  order.payNowTotal = quoteResult.payNow;
-  order.payLaterTotal = quoteResult.payLater;
-  order.voucherCode = quoteResult.voucherCode || "";
+  applyQuoteResultToOrder(order, quoteResult);
 
   const paidAmount = Number(order.paidAmount || 0);
   if (paidAmount <= 0) {
-    order.paymentStatus = quoteResult.payNow > 0 ? "pending" : "paid";
+    order.paymentStatus =
+      normalizeCheckoutPaymentMethod(order.paymentMethod) === PAYMENT_METHODS.COD
+        ? "pending"
+        : quoteResult.payNowTotal > 0
+          ? "pending"
+          : "paid";
     if (order.paymentStatus === "paid" && !order.paidAt) {
       order.paidAt = new Date();
       order.editWindowEndsAt = addHours(
         order.paidAt,
         Number(order.confirmationDeadlineHours || 12),
       );
+    } else if (order.paymentStatus === "pending") {
+      order.paidAt = undefined;
+      order.editWindowEndsAt = undefined;
     }
   } else if (paidAmount >= Number(order.payNowTotal || 0)) {
     order.paymentStatus = "paid";
@@ -1783,6 +2909,211 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
   };
 }
 
+function buildRefundRequestState(order, currentUser, payload = {}, defaults = {}) {
+  const userId = getUserId(currentUser) || order.userId;
+  const reason =
+    toTrimmedString(payload.reasonDetail || payload.reason, "") ||
+    toTrimmedString(defaults.reason, "");
+  if (!reason) {
+    throw new AppError("reason is required", 400);
+  }
+
+  const requestedBreakdown =
+    defaults.requestedBreakdown ||
+    resolveRequestedRefundBreakdown(
+      order,
+      payload,
+      defaults.defaultAmount ?? Number(order.paidAmount || 0),
+    );
+  assertRefundBreakdownAmountBounds(order, requestedBreakdown, "requestedBreakdown");
+  const responsibility =
+    normalizeRefundResponsibility(payload.responsibility) ??
+    normalizeRefundResponsibility(defaults.responsibility) ??
+    (Number(requestedBreakdown.shippingFeeAmount || 0) > 0 ? "mixed" : undefined);
+  assertRefundBreakdownEligibility(responsibility, requestedBreakdown);
+
+  const requestedByUserId = userId || order.userId;
+  const channels = normalizeContactChannels(
+    payload.contactChannels ||
+      payload.contact_channels ||
+      defaults.contactChannels ||
+      [],
+  );
+  const bankAccount = normalizeRefundBankAccount(
+    payload.bankAccount || payload.bank_account || defaults.bankAccount,
+  );
+  const evidence =
+    normalizeUrlList(payload.evidence, "evidence") ??
+    normalizeUrlList(defaults.evidence, "defaults.evidence") ??
+    (Array.isArray(order?.refund?.evidence) ? [...order.refund.evidence] : []);
+  const requiresReturn =
+    normalizeOptionalBoolean(payload.requiresReturn, "requiresReturn") ??
+    normalizeOptionalBoolean(payload.requires_return, "requires_return") ??
+    defaults.requiresReturn ??
+    false;
+  const routing = getRefundRoutingState("requested", {
+    ...order,
+    refund: { ...(order.refund || {}), requiresReturn },
+  });
+
+  return {
+    ...(order.refund || {}),
+    status: "requested",
+    reason,
+    requestedAt: new Date(),
+    requestedBy: requestedByUserId,
+    amount: requestedBreakdown.total,
+    responsibility,
+    requiresReturn,
+    requestedBreakdown,
+    approvedBreakdown: buildRefundBreakdown(),
+    bankAccount: bankAccount || undefined,
+    contactChannels: channels.length > 0 ? channels : ["email"],
+    contactNote: toTrimmedString(payload.note || defaults.note, ""),
+    contactAt: undefined,
+    currentOwnerRole: routing.currentOwnerRole,
+    currentOwnerUserId: routing.currentOwnerUserId,
+    nextActionCode: routing.nextActionCode,
+    approvedAt: undefined,
+    approvedBy: undefined,
+    escalatedAt: undefined,
+    escalatedBy: undefined,
+    escalateReason: "",
+    decisionNote: "",
+    inspectionStatus: requiresReturn ? "pending" : "not_required",
+    inspectionNote: "",
+    inspectionAt: undefined,
+    inspectedBy: undefined,
+    returnShipmentCode: "",
+    returnCarrier: "",
+    returnReceivedAt: undefined,
+    processedAt: undefined,
+    processedBy: undefined,
+    transactionRef: "",
+    payoutProofUrl: "",
+    evidence,
+    rejectReason: "",
+    history: Array.isArray(order?.refund?.history) ? [...order.refund.history] : [],
+  };
+}
+
+async function notifyCustomerRefundUpdate(order, title, message, refundStatus) {
+  if (!order?.userId) return;
+
+  await appendUserNotification(order.userId, {
+    type: "refund",
+    title,
+    message,
+    data: {
+      orderId: order._id,
+      orderCode: order.paymentCode || String(order._id),
+      refundStatus: refundStatus || order?.refund?.status || "none",
+      currentOwnerRole: order?.refund?.currentOwnerRole || "none",
+      nextActionCode: order?.refund?.nextActionCode || "",
+      requiresReturn: Boolean(order?.refund?.requiresReturn),
+    },
+  });
+}
+
+async function createRefundRequest(id, currentUser, payload = {}) {
+  const order = await Order.findById(id);
+  if (!order) throw new AppError("Order not found", 404);
+
+  const userId = getUserId(currentUser);
+  const owner = currentUser && String(order.userId) === String(userId);
+  const businessUser = isStaff(currentUser);
+  if (!owner && !businessUser) {
+    throw new AppError("Forbidden", 403);
+  }
+
+  if (!owner) {
+    assertBusinessUserCanAccessOrder(order, currentUser);
+  }
+
+  if (
+    order.refund &&
+    order.refund.status &&
+    !["none", "completed", "rejected"].includes(order.refund.status)
+  ) {
+    throw new AppError("This order already has an active refund request", 400);
+  }
+
+  const paidAmount = Number(order.paidAmount || 0);
+  if (paidAmount <= 0) {
+    throw new AppError("This order has no refundable paid amount", 400);
+  }
+
+  if (
+    owner &&
+    ![
+      ORDER_STATUS.PENDING,
+      ORDER_STATUS.CANCELLED,
+      ORDER_STATUS.DELIVERED,
+      ORDER_STATUS.RETURNED,
+    ].includes(order.status)
+  ) {
+    throw new AppError(
+      "Refund request is only available for paid pending-confirmation, cancelled, delivered, or returned orders",
+      400,
+    );
+  }
+
+  const ownerUser = await User.findById(order.userId).select("refundAccount");
+  const fallbackBankAccount =
+    normalizeRefundBankAccount(ownerUser?.refundAccount) ||
+    normalizeRefundBankAccount(order.refund?.bankAccount);
+  const baseBreakdown = splitPaidAmountIntoRefundBreakdown(order, paidAmount, true);
+
+  const previousRefundStatus = order.refund?.status || "none";
+
+  order.refund = buildRefundRequestState(order, currentUser, payload, {
+    defaultAmount: baseBreakdown.itemAmount,
+    bankAccount: fallbackBankAccount || undefined,
+    note: payload.note,
+    requiresReturn: false,
+  });
+  appendRefundHistory(
+    order,
+    buildRefundHistoryEntry({
+      action: "create_request",
+      fromStatus: previousRefundStatus,
+      toStatus: order.refund?.status || "requested",
+      currentUser,
+      note: toTrimmedString(payload.note || payload.reason, ""),
+      meta: {
+        amount: Number(order.refund?.amount || 0),
+        reason: order.refund?.reason || "",
+        source: owner ? "customer" : "staff",
+      },
+      isOwner: owner,
+    }),
+  );
+  await order.save();
+
+  publishStatusChange({
+    domain: "order",
+    entityId: order._id,
+    statusField: "refund.status",
+    previousStatus: previousRefundStatus,
+    nextStatus: order.refund?.status || "none",
+    currentUser,
+    recipientUserIds: [order.userId],
+    meta: {
+      paymentCode: order.paymentCode,
+      amount: Number(order.refund?.amount || 0),
+    },
+  });
+
+  await notifyCustomerRefundUpdate(
+    order,
+    "Yeu cau hoan tien da duoc tao",
+    `Don #${order._id} da tao yeu cau hoan tien`,
+    order.refund?.status || "none",
+  );
+
+  return Order.findById(order._id).populate(ORDER_POPULATE);
+}
+
 async function cancelOrder(id, currentUser, payload = {}) {
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
@@ -1796,6 +3127,10 @@ async function cancelOrder(id, currentUser, payload = {}) {
   const staff = isStaff(currentUser);
   if (!owner && !staff) {
     throw new AppError("Forbidden", 403);
+  }
+
+  if (!owner) {
+    assertBusinessUserCanAccessOrder(order, currentUser);
   }
 
   if (order.status === ORDER_STATUS.CANCELLED) {
@@ -1822,6 +3157,7 @@ async function cancelOrder(id, currentUser, payload = {}) {
   const previousInvoiceStatus = invoice.status;
 
   if (paidReceived) {
+    const previousRefundStatus = order.refund?.status || "none";
     const reason =
       toTrimmedString(payload.reason, "") || "Order cancelled by customer";
     const channels = normalizeContactChannels(
@@ -1835,17 +3171,38 @@ async function cancelOrder(id, currentUser, payload = {}) {
       fromPayload ||
       normalizeRefundBankAccount(ownerUser?.refundAccount) ||
       normalizeRefundBankAccount(order.refund?.bankAccount);
-
-    order.refund = {
-      ...(order.refund || {}),
-      status: "requested",
-      reason,
-      requestedAt: new Date(),
-      requestedBy: userId || order.userId,
-      amount: paidAmount,
-      bankAccount: bankAccount || undefined,
-      contactChannels: channels.length > 0 ? channels : ["email"],
-    };
+    order.refund = buildRefundRequestState(
+      order,
+      currentUser,
+      {
+        reason,
+      },
+      {
+        requestedBreakdown: splitPaidAmountIntoRefundBreakdown(
+          order,
+          paidAmount,
+          true,
+        ),
+        bankAccount: bankAccount || undefined,
+        contactChannels: channels.length > 0 ? channels : ["email"],
+        responsibility: "mixed",
+        requiresReturn: false,
+      },
+    );
+    appendRefundHistory(
+      order,
+      buildRefundHistoryEntry({
+        action: "create_request",
+        fromStatus: previousRefundStatus,
+        toStatus: order.refund?.status || "requested",
+        currentUser,
+        note: reason,
+        meta: {
+          amount: Number(order.refund?.amount || 0),
+          source: "cancel_order",
+        },
+      }),
+    );
   } else {
     order.paymentStatus = "failed";
     invoice.status = "void";
@@ -1914,34 +3271,93 @@ async function cancelOrder(id, currentUser, payload = {}) {
 }
 
 async function updateRefundStatus(id, currentUser, payload = {}) {
-  if (!isStaff(currentUser)) {
-    throw new AppError("Forbidden", 403);
-  }
-
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
+  const actorUserId = getUserId(currentUser);
+  const isOwner =
+    currentUser && String(order.userId) === String(actorUserId);
   const previousRefundStatus = order.refund?.status || "none";
   const previousPaymentStatus = order.paymentStatus;
-
-  const nextStatus = normalizeRefundStatus(payload.status);
-  if (!nextStatus || nextStatus === "none") {
-    throw new AppError("Invalid refund status", 400);
-  }
-
-  assertRefundStatusPermission(currentUser, nextStatus);
-
-  if (order.status !== ORDER_STATUS.CANCELLED) {
-    throw new AppError(
-      "Refund status can only be updated for cancelled orders",
-      400,
-    );
-  }
+  const previousOpsStage = order.opsStage;
 
   if (!order.refund || !order.refund.status || order.refund.status === "none") {
     throw new AppError("This order has no active refund request", 400);
   }
 
-  order.refund.status = nextStatus;
+  const requestedAction =
+    normalizeRefundAction(payload.action) ||
+    mapLegacyRefundStatusToAction(
+      currentUser,
+      normalizeRefundStatus(payload.status),
+    );
+  if (!requestedAction) {
+    throw new AppError("Invalid refund action", 400);
+  }
+
+  if (
+    !isStaff(currentUser) &&
+    !isAdmin(currentUser) &&
+    !(isOwner && requestedAction === REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO)
+  ) {
+    throw new AppError("Forbidden", 403);
+  }
+
+  if (!isOwner) {
+    assertBusinessUserCanAccessOrder(order, currentUser);
+  }
+
+  assertRefundActionPermission(currentUser, requestedAction, { isOwner });
+  assertRefundActionTransition(
+    previousRefundStatus,
+    requestedAction,
+    Boolean(order.refund?.requiresReturn),
+  );
+
+  const nextStatus = getRefundActionTargetStatus(requestedAction);
+  const decisionNote = toTrimmedString(
+    payload.decisionNote || payload.decision_note || payload.note,
+    "",
+  );
+  const inspectionNote = toTrimmedString(
+    payload.inspectionNote ||
+      payload.inspection_note ||
+      payload.returnInspectionNote ||
+      payload.return_inspection_note,
+    "",
+  );
+  const returnShipmentCode = toTrimmedString(
+    payload.returnShipmentCode || payload.return_shipment_code,
+    "",
+  );
+  const returnCarrier = toTrimmedString(
+    payload.returnCarrier || payload.return_carrier,
+    "",
+  ).toLowerCase();
+  const payoutProofUrl = normalizeOptionalUrl(
+    payload.payoutProofUrl || payload.payout_proof_url,
+    "payoutProofUrl",
+  );
+  const responsibility = normalizeRefundResponsibility(payload.responsibility);
+  if (responsibility !== undefined) {
+    order.refund.responsibility = responsibility;
+  }
+
+  const requiresReturn =
+    normalizeOptionalBoolean(payload.requiresReturn, "requiresReturn") ??
+    normalizeOptionalBoolean(payload.requires_return, "requires_return");
+  if (requiresReturn !== undefined) {
+    order.refund.requiresReturn = requiresReturn;
+    order.refund.inspectionStatus = requiresReturn ? "pending" : "not_required";
+    if (!requiresReturn) {
+      order.refund.inspectionNote = "";
+      order.refund.inspectionAt = undefined;
+      order.refund.inspectedBy = undefined;
+      order.refund.returnShipmentCode = "";
+      order.refund.returnCarrier = "";
+      order.refund.returnReceivedAt = undefined;
+    }
+  }
+
   if (payload.contactNote !== undefined) {
     order.refund.contactNote = toTrimmedString(payload.contactNote, "");
     order.refund.contactAt = new Date();
@@ -1953,28 +3369,282 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
     order.refund.contactChannels = channels;
   }
 
-  if (nextStatus === "processing") {
-    order.refund.processedBy = getUserId(currentUser);
-  }
+  const workflowSettings =
+    requestedAction === REFUND_ACTIONS.APPROVE ||
+    requestedAction === REFUND_ACTIONS.COMPLETE
+      ? await getRefundWorkflowSettings()
+      : DEFAULT_REFUND_WORKFLOW_SETTINGS;
+  let historyNote = decisionNote;
+  let historyMeta = {
+    amount: Number(order.refund?.amount || 0),
+  };
 
-  if (nextStatus === "completed") {
-    order.refund.processedBy = getUserId(currentUser);
-    order.refund.processedAt = new Date();
-    order.paymentStatus = "refunded";
-  }
-
-  if (nextStatus === "rejected") {
-    const rejectReason = toTrimmedString(payload.rejectReason, "");
-    if (!rejectReason) {
-      throw new AppError(
-        "rejectReason is required when refund is rejected",
-        400,
+  switch (requestedAction) {
+    case REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO: {
+      const requestedBreakdown = resolveCustomerRequestedRefundBreakdown(
+        order,
+        payload,
       );
+      assertRefundBreakdownAmountBounds(
+        order,
+        requestedBreakdown,
+        "requestedBreakdown",
+      );
+      const effectiveResponsibility =
+        order.refund.responsibility ||
+        (Number(requestedBreakdown.shippingFeeAmount || 0) > 0
+          ? "mixed"
+          : undefined);
+      assertRefundBreakdownEligibility(
+        effectiveResponsibility,
+        requestedBreakdown,
+      );
+
+      const nextReason = toTrimmedString(
+        payload.reasonDetail || payload.reason,
+        order.refund.reason || "",
+      );
+      const bankAccount = normalizeRefundBankAccount(
+        payload.bankAccount || payload.bank_account,
+      );
+      const evidence = normalizeUrlList(payload.evidence, "evidence");
+      const customerNote = toTrimmedString(
+        payload.contactNote || payload.note || payload.decisionNote,
+        "",
+      );
+
+      if (nextReason) {
+        order.refund.reason = nextReason;
+      }
+      order.refund.requestedBreakdown = requestedBreakdown;
+      order.refund.amount = requestedBreakdown.total;
+      if (effectiveResponsibility !== undefined) {
+        order.refund.responsibility = effectiveResponsibility;
+      }
+      if (bankAccount) {
+        order.refund.bankAccount = bankAccount;
+      }
+      if (evidence !== undefined) {
+        order.refund.evidence = evidence;
+      }
+      if (customerNote) {
+        const previousContactNote = toTrimmedString(order.refund.contactNote, "");
+        order.refund.contactNote = previousContactNote
+          ? `${previousContactNote}\n\nCustomer update: ${customerNote}`
+          : customerNote;
+        order.refund.contactAt = new Date();
+      }
+      order.refund.rejectReason = "";
+      order.refund.inspectionStatus = order.refund.requiresReturn
+        ? "pending"
+        : "not_required";
+      historyNote = customerNote || nextReason;
+      historyMeta = {
+        amount: requestedBreakdown.total,
+        requestedBreakdown,
+      };
+      break;
     }
-    order.refund.rejectReason = rejectReason;
-    order.refund.processedBy = getUserId(currentUser);
-    order.refund.processedAt = new Date();
+    case REFUND_ACTIONS.REQUEST_CUSTOMER_INFO:
+      if (decisionNote) {
+        order.refund.contactNote = decisionNote;
+        order.refund.contactAt = new Date();
+      }
+      historyNote = decisionNote;
+      break;
+    case REFUND_ACTIONS.ESCALATE: {
+      const escalateReason = toTrimmedString(payload.escalateReason, "") || decisionNote;
+      if (!escalateReason) {
+        throw new AppError("escalateReason is required when escalating refund", 400);
+      }
+      order.refund.escalateReason = escalateReason;
+      order.refund.escalatedAt = new Date();
+      order.refund.escalatedBy = actorUserId;
+      order.refund.decisionNote = decisionNote;
+      historyNote = escalateReason;
+      historyMeta = {
+        amount: Number(order.refund?.amount || 0),
+        escalateReason,
+      };
+      break;
+    }
+    case REFUND_ACTIONS.APPROVE:
+    case REFUND_ACTIONS.MANAGER_APPROVE: {
+      const approvedBreakdown = resolveApprovedRefundBreakdown(order, payload);
+      assertRefundBreakdownAmountBounds(order, approvedBreakdown, "approvedBreakdown");
+      assertRefundBreakdownNotAboveRequested(
+        order?.refund?.requestedBreakdown,
+        approvedBreakdown,
+        "approvedBreakdown",
+      );
+      const effectiveResponsibility =
+        responsibility || order.refund.responsibility || "customer";
+      assertRefundBreakdownEligibility(
+        effectiveResponsibility,
+        approvedBreakdown,
+      );
+      order.refund.responsibility = effectiveResponsibility;
+      order.refund.approvedBreakdown = approvedBreakdown;
+      order.refund.amount = approvedBreakdown.total;
+      if (requestedAction === REFUND_ACTIONS.APPROVE) {
+        const managerApprovalReasons = getRefundManagerApprovalReasons(
+          order,
+          {
+            ...order.refund,
+            approvedBreakdown,
+            requiresReturn: Boolean(order.refund.requiresReturn),
+          },
+          workflowSettings,
+        );
+        if (managerApprovalReasons.length > 0) {
+          throw new AppError(
+            `Manager approval required: ${managerApprovalReasons.join("; ")}`,
+            400,
+          );
+        }
+      }
+      order.refund.approvedAt = new Date();
+      order.refund.approvedBy = actorUserId;
+      order.refund.decisionNote = decisionNote;
+      order.refund.rejectReason = "";
+      order.refund.inspectionStatus = order.refund.requiresReturn
+        ? "pending"
+        : "not_required";
+      historyNote = decisionNote;
+      historyMeta = {
+        amount: approvedBreakdown.total,
+        approvedBreakdown,
+        responsibility: effectiveResponsibility,
+        requiresReturn: Boolean(order.refund.requiresReturn),
+      };
+      break;
+    }
+    case REFUND_ACTIONS.REJECT:
+    case REFUND_ACTIONS.MANAGER_REJECT: {
+      const rejectReason = toTrimmedString(payload.rejectReason, "");
+      if (!rejectReason) {
+        throw new AppError(
+          "rejectReason is required when refund is rejected",
+          400,
+        );
+      }
+      order.refund.rejectReason = rejectReason;
+      order.refund.decisionNote = decisionNote;
+      historyNote = rejectReason;
+      historyMeta = {
+        amount: Number(order.refund?.amount || 0),
+        rejectReason,
+      };
+      break;
+    }
+    case REFUND_ACTIONS.MARK_RETURN_PENDING:
+      order.refund.requiresReturn = true;
+      order.refund.inspectionStatus = "pending";
+      syncOrderWithOpsStage(order, ORDER_OPS_STAGE.RETURN_PENDING);
+      historyNote = decisionNote || "Return verification assigned to operations.";
+      break;
+    case REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED:
+      order.refund.inspectionStatus = "passed";
+      order.refund.inspectionNote = inspectionNote || decisionNote;
+      order.refund.inspectionAt = new Date();
+      order.refund.inspectedBy = actorUserId;
+      order.refund.returnReceivedAt = new Date();
+      if (returnShipmentCode) {
+        order.refund.returnShipmentCode = returnShipmentCode;
+      }
+      if (returnCarrier) {
+        order.refund.returnCarrier = returnCarrier;
+      }
+      syncOrderWithOpsStage(order, ORDER_OPS_STAGE.RETURNED);
+      historyNote = inspectionNote || decisionNote || "Return item received and passed inspection.";
+      historyMeta = {
+        amount: Number(order.refund?.amount || 0),
+        inspectionStatus: "passed",
+        returnShipmentCode: order.refund.returnShipmentCode || "",
+        returnCarrier: order.refund.returnCarrier || "",
+      };
+      break;
+    case REFUND_ACTIONS.INSPECTION_FAILED: {
+      const failedInspectionNote = inspectionNote || decisionNote;
+      if (!failedInspectionNote) {
+        throw new AppError(
+          "inspectionNote is required when return inspection fails",
+          400,
+        );
+      }
+      order.refund.inspectionStatus = "failed";
+      order.refund.inspectionNote = failedInspectionNote;
+      order.refund.inspectionAt = new Date();
+      order.refund.inspectedBy = actorUserId;
+      if (returnShipmentCode) {
+        order.refund.returnShipmentCode = returnShipmentCode;
+      }
+      if (returnCarrier) {
+        order.refund.returnCarrier = returnCarrier;
+      }
+      syncOrderWithOpsStage(order, ORDER_OPS_STAGE.EXCEPTION_HOLD);
+      historyNote = failedInspectionNote;
+      historyMeta = {
+        amount: Number(order.refund?.amount || 0),
+        inspectionStatus: "failed",
+        returnShipmentCode: order.refund.returnShipmentCode || "",
+        returnCarrier: order.refund.returnCarrier || "",
+      };
+      break;
+    }
+    case REFUND_ACTIONS.START_PROCESSING:
+      order.refund.processedBy = actorUserId;
+      order.refund.decisionNote = decisionNote;
+      historyNote = decisionNote || "Operations started payout processing.";
+      break;
+    case REFUND_ACTIONS.COMPLETE: {
+      const transactionRef = toTrimmedString(payload.transactionRef, "");
+      if (!transactionRef) {
+        throw new AppError("transactionRef is required when completing payout", 400);
+      }
+      if (workflowSettings.requirePayoutProof && !payoutProofUrl) {
+        throw new AppError("payoutProofUrl is required by payout policy", 400);
+      }
+      order.refund.processedBy = actorUserId;
+      order.refund.processedAt = new Date();
+      order.refund.transactionRef = transactionRef;
+      if (payoutProofUrl !== undefined) {
+        order.refund.payoutProofUrl = payoutProofUrl;
+      }
+      order.refund.decisionNote = decisionNote;
+      if (shouldMarkOrderAsFullyRefunded(order, order.refund)) {
+        order.paymentStatus = "refunded";
+      }
+      historyNote = decisionNote || transactionRef;
+      historyMeta = {
+        amount: Number(order.refund?.amount || 0),
+        transactionRef,
+        payoutProofUrl: order.refund.payoutProofUrl || "",
+      };
+      break;
+    }
+    case REFUND_ACTIONS.SEND_BACK_TO_STAFF:
+      order.refund.decisionNote = decisionNote;
+      historyNote = decisionNote || "Manager sent case back to staff.";
+      break;
+    default:
+      break;
   }
+
+  order.refund.status = nextStatus;
+  applyRefundRoutingState(order, nextStatus);
+  appendRefundHistory(
+    order,
+    buildRefundHistoryEntry({
+      action: requestedAction,
+      fromStatus: previousRefundStatus,
+      toStatus: nextStatus,
+      currentUser,
+      note: historyNote,
+      meta: historyMeta,
+      isOwner,
+    }),
+  );
 
   const invoice = await ensureOrderInvoice(order);
   const previousInvoiceStatus = invoice.status;
@@ -1995,6 +3665,7 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
       amount: Number(order.refund?.amount || 0),
     },
   });
+  publishOpsStageChange(order, previousOpsStage, currentUser);
   publishStatusChange({
     domain: "order",
     entityId: order._id,
@@ -2020,14 +3691,153 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
     },
   });
 
-  await appendUserNotification(order.userId, {
-    title: "Cap nhat hoan tien don hang",
-    message: `Trang thai hoan tien #${order._id} da chuyen sang "${nextStatus}"`,
-    data: {
-      orderId: order._id,
-      refundStatus: nextStatus,
-    },
-  });
+  await notifyCustomerOpsStageChange(order, previousOpsStage);
+  await notifyCustomerRefundUpdate(
+    order,
+    "Cap nhat hoan tien don hang",
+    `Trang thai hoan tien #${order._id} da chuyen sang "${nextStatus}"`,
+    nextStatus,
+  );
+
+  return Order.findById(order._id).populate(ORDER_POPULATE);
+}
+
+async function overrideRefund(id, currentUser, payload = {}) {
+  if (!isAdmin(currentUser)) {
+    throw new AppError("Forbidden", 403);
+  }
+
+  const order = await Order.findById(id);
+  if (!order) throw new AppError("Order not found", 404);
+  assertBusinessUserCanAccessOrder(order, currentUser);
+  if (!order.refund || !order.refund.status || order.refund.status === "none") {
+    throw new AppError("This order has no active refund request", 400);
+  }
+
+  const action = toTrimmedString(payload.action, "").toLowerCase();
+  const reason = toTrimmedString(payload.reason, "");
+  if (!REFUND_OVERRIDE_ACTIONS.has(action)) {
+    throw new AppError("Invalid override action", 400);
+  }
+  if (!reason) {
+    throw new AppError("reason is required for override", 400);
+  }
+
+  const previousRefundStatus = order.refund.status || "none";
+  const previousOwnerRole = order.refund.currentOwnerRole || "none";
+  const previousOpsStage = order.opsStage;
+  const invoice = await ensureOrderInvoice(order);
+  const previousInvoiceStatus = invoice.status;
+
+  let nextStatus = previousRefundStatus;
+  let notifyCustomer = false;
+
+  switch (action) {
+    case "reassign_sales":
+      if (["completed", "rejected"].includes(previousRefundStatus)) {
+        throw new AppError("Closed refunds cannot be reassigned to sales", 400);
+      }
+      order.refund.currentOwnerRole = "sales";
+      order.refund.currentOwnerUserId = null;
+      order.refund.nextActionCode = REFUND_ACTIONS.START_REVIEW;
+      break;
+    case "reassign_manager":
+      if (["completed", "rejected"].includes(previousRefundStatus)) {
+        throw new AppError("Closed refunds cannot be reassigned to manager", 400);
+      }
+      order.refund.currentOwnerRole = "manager";
+      order.refund.currentOwnerUserId = null;
+      order.refund.nextActionCode = REFUND_ACTIONS.MANAGER_APPROVE;
+      break;
+    case "reassign_operations":
+      if (
+        !["approved", "return_pending", "return_received", "processing"].includes(
+          previousRefundStatus,
+        )
+      ) {
+        throw new AppError(
+          "Operations can only be assigned for approved/processing refund states",
+          400,
+        );
+      }
+      order.refund.currentOwnerRole = "operations";
+      order.refund.currentOwnerUserId = null;
+      order.refund.nextActionCode = getRefundRoutingState(previousRefundStatus, order).nextActionCode;
+      break;
+    case "reset_reviewing":
+      if (previousRefundStatus === "completed") {
+        throw new AppError("Completed refund cannot be reset to reviewing", 400);
+      }
+      nextStatus = "reviewing";
+      order.refund.status = nextStatus;
+      order.refund.rejectReason = "";
+      order.refund.decisionNote = reason;
+      applyRefundRoutingState(order, nextStatus);
+      break;
+    case "retry_customer_notification":
+      notifyCustomer = true;
+      break;
+    default:
+      break;
+  }
+
+  appendRefundHistory(
+    order,
+    buildRefundHistoryEntry({
+      action: `admin_${action}`,
+      fromStatus: previousRefundStatus,
+      toStatus: nextStatus,
+      currentUser,
+      note: reason,
+      meta: {
+        previousOwnerRole,
+        nextOwnerRole: order.refund.currentOwnerRole || "none",
+      },
+    }),
+  );
+
+  syncInvoiceByOrderState(invoice, order);
+  await Promise.all([order.save(), invoice.save()]);
+
+  if (nextStatus !== previousRefundStatus) {
+    publishStatusChange({
+      domain: "order",
+      entityId: order._id,
+      statusField: "refund.status",
+      previousStatus: previousRefundStatus,
+      nextStatus,
+      currentUser,
+      recipientUserIds: [order.userId],
+      meta: {
+        paymentCode: order.paymentCode,
+        overrideAction: action,
+      },
+    });
+    publishOpsStageChange(order, previousOpsStage, currentUser);
+    publishStatusChange({
+      domain: "invoice",
+      entityId: invoice._id,
+      previousStatus: previousInvoiceStatus,
+      nextStatus: invoice.status,
+      currentUser,
+      recipientUserIds: [order.userId],
+      meta: {
+        orderId: order._id,
+        invoiceCode: invoice.invoiceCode,
+      },
+    });
+  }
+
+  if (notifyCustomer || nextStatus !== previousRefundStatus) {
+    await notifyCustomerRefundUpdate(
+      order,
+      notifyCustomer ? "Refund update resent" : "Refund override applied",
+      notifyCustomer
+        ? `Please review the latest refund update for order #${order._id}`
+        : `Refund case #${order._id} has been moved to "${order.refund.status}"`,
+      order.refund.status || nextStatus,
+    );
+  }
 
   return Order.findById(order._id).populate(ORDER_POPULATE);
 }
@@ -2046,6 +3856,7 @@ async function updateOrderStatus(id, currentUser, status) {
 
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
+  assertBusinessUserCanAccessOrder(order, currentUser);
   const previousOrderStatus = order.status;
   const previousOpsStage = order.opsStage;
 
@@ -2099,6 +3910,7 @@ async function updateOrderOpsStage(id, currentUser, stage) {
 
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
+  assertBusinessUserCanAccessOrder(order, currentUser);
 
   if (order.status === ORDER_STATUS.PENDING) {
     throw new AppError("Order must be confirmed before updating ops stage", 400);
@@ -2177,6 +3989,7 @@ async function updateOrderOpsExecution(id, currentUser, payload) {
 
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
+  assertBusinessUserCanAccessOrder(order, currentUser);
 
   const patch = normalizeOpsExecutionPatch(payload);
   if (Object.keys(patch).length === 0) {
@@ -2219,6 +4032,7 @@ async function listOrders(currentUser, options = {}) {
   const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));
   const skip = (page - 1) * limit;
   const query = {};
+  const actorStoreIds = getAccessibleStoreIds(currentUser);
 
   if (isStaff(currentUser)) {
     if (options.userId) {
@@ -2249,6 +4063,21 @@ async function listOrders(currentUser, options = {}) {
     ).toLowerCase();
   }
 
+  if (Array.isArray(actorStoreIds)) {
+    query.storeId = { $in: actorStoreIds };
+  }
+
+  if (options.storeId) {
+    const normalizedStoreId = toTrimmedString(options.storeId, "");
+    if (normalizedStoreId) {
+      if (Array.isArray(actorStoreIds) && !actorStoreIds.includes(normalizedStoreId)) {
+        query.storeId = { $in: [] };
+      } else {
+        query.storeId = normalizedStoreId;
+      }
+    }
+  }
+
   const [orders, total] = await Promise.all([
     Order.find(query)
       .populate(ORDER_POPULATE)
@@ -2277,7 +4106,9 @@ module.exports = {
   updateOrderItems,
   patchOrderItem,
   cancelOrder,
+  createRefundRequest,
   updateRefundStatus,
+  overrideRefund,
   updateOrderStatus,
   updateOrderOpsStage,
   updateOrderOpsExecution,

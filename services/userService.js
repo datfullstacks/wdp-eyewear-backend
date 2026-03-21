@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const Invoice = require('../models/Invoice');
+const Store = require('../models/Store');
 const bcrypt = require('bcryptjs');
 const AppError = require('../errors/AppError');
 const { isExpoPushToken } = require('../helpers/expoPush');
@@ -13,6 +14,25 @@ const {
   canReadUserRecord,
   canDeleteUser
 } = require('../helpers/roles');
+const {
+  normalizeStoreAccess,
+  getUserStoreAccess,
+  getAccessibleStoreIds,
+  isStoreScopeWithinAllowed,
+} = require('../helpers/storeAccess');
+
+const USER_STORE_POPULATE = [
+  {
+    path: 'storeAccess.primaryStoreId',
+    select:
+      'name code type status phone email addressLine1 ward district city openingHours supportsTryOn supportsPickup isDefault',
+  },
+  {
+    path: 'storeAccess.storeIds',
+    select:
+      'name code type status phone email addressLine1 ward district city openingHours supportsTryOn supportsPickup isDefault',
+  },
+];
 
 class UserService {
   normalizePushTokenInput(input = {}) {
@@ -42,6 +62,131 @@ class UserService {
       throw new AppError(`${fieldName} must be a positive integer`, 400);
     }
     return normalized;
+  }
+
+  async normalizeUserStoreAccess(input = {}, targetRole) {
+    const normalizedRole = normalizeRole(targetRole);
+    if (normalizedRole === ROLE.ADMIN) {
+      return {
+        mode: 'all',
+        primaryStoreId: undefined,
+        storeIds: [],
+        note: String(input?.note || '').trim(),
+      };
+    }
+
+    const normalized = normalizeStoreAccess(input);
+    const requestedIds = [...new Set(
+      [
+        normalized.primaryStoreId,
+        ...(Array.isArray(normalized.storeIds) ? normalized.storeIds : []),
+      ].filter(Boolean)
+    )];
+
+    if (requestedIds.length > 0) {
+      const stores = await Store.find({ _id: { $in: requestedIds } }).select('_id');
+      const knownIds = new Set(stores.map((store) => String(store._id)));
+      const invalidIds = requestedIds.filter((storeId) => !knownIds.has(String(storeId)));
+      if (invalidIds.length > 0) {
+        throw new AppError('storeAccess contains unknown store id(s)', 400);
+      }
+    }
+
+    if (normalized.mode === 'selected' && normalized.storeIds.length === 0) {
+      throw new AppError('Selected store scope requires at least one store', 400);
+    }
+
+    if (normalized.mode === 'selected' && !normalized.primaryStoreId) {
+      throw new AppError('Selected store scope requires primaryStoreId', 400);
+    }
+
+    return normalized;
+  }
+
+  assertActorCanAssignStoreAccess(currentUser, targetStoreAccess, targetRole) {
+    const actorStoreIds = getAccessibleStoreIds(currentUser);
+    if (actorStoreIds === null) {
+      return;
+    }
+
+    if (!isStoreScopeWithinAllowed(targetStoreAccess, actorStoreIds)) {
+      throw new AppError(
+        `Cannot assign ${targetRole} outside the current user's store scope`,
+        403,
+      );
+    }
+  }
+
+  paginateRows(rows, page, limit) {
+    const total = rows.length;
+    const skip = (page - 1) * limit;
+    const paginatedRows = rows.slice(skip, skip + limit);
+    return {
+      rows: paginatedRows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  buildUserQuery(filters = {}) {
+    const query = {};
+
+    if (filters.role) {
+      query.role = normalizeRole(filters.role);
+    }
+
+    if (filters.search) {
+      query.$or = [
+        { name: { $regex: filters.search, $options: 'i' } },
+        { email: { $regex: filters.search, $options: 'i' } },
+        { phone: { $regex: filters.search, $options: 'i' } },
+      ];
+    }
+
+    return query;
+  }
+
+  getUserQueryBuilder() {
+    return User.find().select('-password').populate(USER_STORE_POPULATE);
+  }
+
+  canActorAccessBusinessUser(currentUser, targetUser) {
+    if (!canReadUserRecord(currentUser, targetUser)) {
+      return false;
+    }
+
+    const actorStoreIds = getAccessibleStoreIds(currentUser);
+    if (actorStoreIds === null) {
+      return true;
+    }
+
+    if (normalizeRole(targetUser?.role) === ROLE.CUSTOMER) {
+      return false;
+    }
+
+    return isStoreScopeWithinAllowed(targetUser?.storeAccess, actorStoreIds);
+  }
+
+  async canActorAccessCustomer(currentUser, customerId) {
+    const actorStoreIds = getAccessibleStoreIds(currentUser);
+    if (actorStoreIds === null) {
+      return true;
+    }
+
+    if (!customerId) {
+      return false;
+    }
+
+    const accessibleOrder = await Order.exists({
+      userId: customerId,
+      storeId: { $in: actorStoreIds },
+    });
+
+    return Boolean(accessibleOrder);
   }
 
   normalizeAddressInput(addressData = {}, { partial = false } = {}) {
@@ -633,59 +778,129 @@ class UserService {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
+    const storeAccess = await this.normalizeUserStoreAccess(
+      userData.storeAccess,
+      normalizedRole || ROLE.CUSTOMER
+    );
+    this.assertActorCanAssignStoreAccess(
+      currentUser,
+      storeAccess,
+      normalizedRole || ROLE.CUSTOMER
+    );
 
     const user = await User.create({
       name: String(name || '').trim(),
       email: String(email || '').trim().toLowerCase(),
       password: hashedPassword,
       provider: 'local',
-      role: normalizedRole || ROLE.CUSTOMER
+      role: normalizedRole || ROLE.CUSTOMER,
+      phone: String(userData.phone || '').trim(),
+      department: String(userData.department || '').trim(),
+      position: String(userData.position || '').trim(),
+      permissions: Array.isArray(userData.permissions)
+        ? userData.permissions.map((value) => String(value || '').trim()).filter(Boolean)
+        : [],
+      storeAccess
     });
 
-    return User.findById(user._id).select('-password');
+    return User.findById(user._id).select('-password').populate(USER_STORE_POPULATE);
   }
 
   // Get all users with pagination
-  async getAllUsers(page = 1, limit = 10, filters = {}) {
-    const skip = (page - 1) * limit;
-    
-    const query = {};
-    if (filters.role) query.role = filters.role;
-    if (filters.search) {
-      query.$or = [
-        { name: { $regex: filters.search, $options: 'i' } },
-        { email: { $regex: filters.search, $options: 'i' } }
-      ];
+  async getAllUsers(page = 1, limit = 10, filters = {}, currentUser) {
+    const query = this.buildUserQuery(filters);
+    const actorStoreIds = getAccessibleStoreIds(currentUser);
+    const normalizedRoleFilter = normalizeRole(filters.role);
+
+    if (actorStoreIds === null) {
+      const skip = (page - 1) * limit;
+      const [users, total] = await Promise.all([
+        User.find(query)
+          .select('-password')
+          .populate(USER_STORE_POPULATE)
+          .skip(skip)
+          .limit(limit)
+          .sort({ createdAt: -1 }),
+        User.countDocuments(query)
+      ]);
+
+      return {
+        users,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      };
     }
 
-    const [users, total] = await Promise.all([
-      User.find(query)
-        .select('-password')
-        .skip(skip)
-        .limit(limit)
-        .sort({ createdAt: -1 }),
-      User.countDocuments(query)
-    ]);
+    if (normalizedRoleFilter === ROLE.CUSTOMER) {
+      const accessibleCustomerIds = await Order.distinct('userId', {
+        storeId: { $in: actorStoreIds },
+        userId: { $ne: null }
+      });
+      const customerQuery = {
+        ...query,
+        role: ROLE.CUSTOMER,
+        _id: { $in: accessibleCustomerIds }
+      };
+      const skip = (page - 1) * limit;
+      const [users, total] = await Promise.all([
+        User.find(customerQuery)
+          .select('-password')
+          .populate(USER_STORE_POPULATE)
+          .skip(skip)
+          .limit(limit)
+          .sort({ createdAt: -1 }),
+        User.countDocuments(customerQuery)
+      ]);
+
+      return {
+        users,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit)
+        }
+      };
+    }
+
+    const candidates = await User.find(query)
+      .select('-password')
+      .populate(USER_STORE_POPULATE)
+      .sort({ createdAt: -1 });
+    const filteredUsers = candidates.filter((user) =>
+      this.canActorAccessBusinessUser(currentUser, user)
+    );
+    const { rows, pagination } = this.paginateRows(filteredUsers, page, limit);
 
     return {
-      users,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
-      }
+      users: rows,
+      pagination
     };
   }
 
   // Get user by ID
   async getUserById(userId, currentUser) {
-    const user = await User.findById(userId).select('-password');
+    const user = await User.findById(userId)
+      .select('-password')
+      .populate(USER_STORE_POPULATE);
     if (!user) {
       throw new AppError('User not found', 404);
     }
 
     if (!canReadUserRecord(currentUser, user)) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    if (normalizeRole(user.role) === ROLE.CUSTOMER) {
+      const canAccessCustomer = await this.canActorAccessCustomer(currentUser, user._id);
+      if (!canAccessCustomer) {
+        throw new AppError('Forbidden', 403);
+      }
+    } else if (!this.canActorAccessBusinessUser(currentUser, user)) {
       throw new AppError('Forbidden', 403);
     }
 
@@ -695,7 +910,9 @@ class UserService {
   // Update user
   async updateUser(userId, updateData, currentUser) {
     const { name, email, role } = updateData;
-    const existingUser = await User.findById(userId).select('-password');
+    const existingUser = await User.findById(userId)
+      .select('-password')
+      .populate(USER_STORE_POPULATE);
     if (!existingUser) {
       throw new AppError('User not found', 404);
     }
@@ -713,10 +930,40 @@ class UserService {
       }
     }
 
+    if (normalizeRole(existingUser.role) === ROLE.CUSTOMER) {
+      const canAccessCustomer = await this.canActorAccessCustomer(currentUser, existingUser._id);
+      if (!canAccessCustomer) {
+        throw new AppError('Forbidden', 403);
+      }
+    } else if (!this.canActorAccessBusinessUser(currentUser, existingUser)) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    const nextStoreAccess = await this.normalizeUserStoreAccess(
+      updateData.storeAccess !== undefined ? updateData.storeAccess : existingUser.storeAccess,
+      nextRole
+    );
+    this.assertActorCanAssignStoreAccess(currentUser, nextStoreAccess, nextRole);
+
     const updatePayload = {};
     if (name !== undefined) updatePayload.name = name;
     if (email !== undefined) updatePayload.email = email;
     if (role !== undefined) updatePayload.role = nextRole;
+    if (updateData.phone !== undefined) updatePayload.phone = String(updateData.phone || '').trim();
+    if (updateData.department !== undefined) {
+      updatePayload.department = String(updateData.department || '').trim();
+    }
+    if (updateData.position !== undefined) {
+      updatePayload.position = String(updateData.position || '').trim();
+    }
+    if (updateData.permissions !== undefined) {
+      updatePayload.permissions = Array.isArray(updateData.permissions)
+        ? updateData.permissions.map((value) => String(value || '').trim()).filter(Boolean)
+        : [];
+    }
+    if (updateData.storeAccess !== undefined || role !== undefined) {
+      updatePayload.storeAccess = nextStoreAccess;
+    }
 
     if (!Object.keys(updatePayload).length) {
       throw new AppError('No user fields to update', 400);
@@ -725,19 +972,30 @@ class UserService {
     const user = await User.findByIdAndUpdate(userId, updatePayload, {
       new: true,
       runValidators: true
-    }).select('-password');
+    }).select('-password').populate(USER_STORE_POPULATE);
 
     return user;
   }
 
   // Delete user
   async deleteUser(userId, currentUser) {
-    const targetUser = await User.findById(userId).select('-password');
+    const targetUser = await User.findById(userId)
+      .select('-password')
+      .populate(USER_STORE_POPULATE);
     if (!targetUser) {
       throw new AppError('User not found', 404);
     }
 
     if (!canDeleteUser(currentUser, targetUser)) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    if (normalizeRole(targetUser.role) === ROLE.CUSTOMER) {
+      const canAccessCustomer = await this.canActorAccessCustomer(currentUser, targetUser._id);
+      if (!canAccessCustomer) {
+        throw new AppError('Forbidden', 403);
+      }
+    } else if (!this.canActorAccessBusinessUser(currentUser, targetUser)) {
       throw new AppError('Forbidden', 403);
     }
 
@@ -779,24 +1037,55 @@ class UserService {
   }
 
   // Get user statistics
-  async getUserStats() {
-    const stats = await User.aggregate([
-      {
-        $group: {
-          _id: '$role',
-          count: { $sum: 1 }
+  async getUserStats(currentUser) {
+    const actorStoreIds = getAccessibleStoreIds(currentUser);
+    if (actorStoreIds === null) {
+      const stats = await User.aggregate([
+        {
+          $group: {
+            _id: '$role',
+            count: { $sum: 1 }
+          }
         }
-      }
-    ]);
+      ]);
 
-    const total = await User.countDocuments();
+      const total = await User.countDocuments();
+
+      return {
+        total,
+        byRole: stats.reduce((acc, stat) => {
+          acc[stat._id] = stat.count;
+          return acc;
+        }, {})
+      };
+    }
+
+    const businessUsers = await User.find({
+      role: { $in: [ROLE.STAFF, ROLE.OPERATION, ROLE.MANAGER, ROLE.ADMIN] }
+    })
+      .select('-password')
+      .populate(USER_STORE_POPULATE);
+    const accessibleBusinessUsers = businessUsers.filter((user) =>
+      this.canActorAccessBusinessUser(currentUser, user)
+    );
+    const customerIds = await Order.distinct('userId', {
+      storeId: { $in: actorStoreIds },
+      userId: { $ne: null }
+    });
+    const customerCount = await User.countDocuments({
+      _id: { $in: customerIds },
+      role: ROLE.CUSTOMER
+    });
+
+    const byRole = accessibleBusinessUsers.reduce((acc, user) => {
+      const roleKey = normalizeRole(user.role) || ROLE.CUSTOMER;
+      acc[roleKey] = Number(acc[roleKey] || 0) + 1;
+      return acc;
+    }, { [ROLE.CUSTOMER]: customerCount });
 
     return {
-      total,
-      byRole: stats.reduce((acc, stat) => {
-        acc[stat._id] = stat.count;
-        return acc;
-      }, {})
+      total: customerCount + accessibleBusinessUsers.length,
+      byRole
     };
   }
 }

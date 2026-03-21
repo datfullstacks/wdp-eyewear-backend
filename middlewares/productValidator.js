@@ -2,6 +2,10 @@
 const { body, query } = require('express-validator');
 const { PRODUCT_TYPES, PRODUCT_STATUS, ACCESSORY_CATEGORIES, TRY_ON_STATUS } = require('../constants');
 const SEASONS = ['spring', 'summer', 'autumn', 'winter', 'all_season'];
+const PREORDER_SHIPPING_COLLECTION_TIMINGS = ['upfront', 'with_balance', 'on_delivery'];
+const MAX_TRY_ON_MODELS = 8;
+const MAX_TRY_ON_ASSET_IDS = MAX_TRY_ON_MODELS * 2;
+const STORE_SCOPE_MODES = ['all', 'selected'];
 
 const createTypeGuards = () => [
   body().custom((value, { req }) => {
@@ -150,10 +154,32 @@ const extract3dFormats = (assets = []) => {
   return formats;
 };
 
+const countMappedTryOnVariants = (req = {}) => {
+  const assets = Array.isArray(req.body?.media?.assets) ? req.body.media.assets : [];
+  const assetMap = new Map(
+    assets
+      .filter((asset) => asset && asset._id)
+      .map((asset) => [String(asset._id), asset])
+  );
+  const variants = Array.isArray(req.body?.variants) ? req.body.variants : [];
+
+  return variants.reduce((count, variant) => {
+    const assetIds = Array.isArray(variant?.assetIds) ? variant.assetIds : [];
+    const has3dAsset = assetIds.some((assetId) => {
+      const asset = assetMap.get(String(assetId));
+      return asset?.assetType === '3d';
+    });
+    return count + (has3dAsset ? 1 : 0);
+  }, 0);
+};
+
 const tryOnPayloadRules = [
   body('media.tryOn.enabled').optional().isBoolean().withMessage('media.tryOn.enabled must be boolean'),
   body('media.tryOn.arUrl').optional().isString().withMessage('media.tryOn.arUrl must be a string'),
-  body('media.tryOn.assetIds').optional().isArray().withMessage('media.tryOn.assetIds must be an array'),
+  body('media.tryOn.assetIds')
+    .optional()
+    .isArray({ max: MAX_TRY_ON_ASSET_IDS })
+    .withMessage(`media.tryOn.assetIds must be an array with at most ${MAX_TRY_ON_ASSET_IDS} asset ids`),
   body('media.tryOn.assetIds.*')
     .optional()
     .isMongoId()
@@ -192,6 +218,16 @@ const tryOnPayloadRules = [
       throw new Error(
         'media.assets must include 3d assets with both glb and usdz when media.tryOn.status is approved or published'
       );
+    }
+    return true;
+  }),
+  body().custom((value, { req }) => {
+    const tryOn = req.body?.media?.tryOn;
+    if (!tryOn?.enabled) return true;
+
+    const mappedVariantCount = countMappedTryOnVariants(req);
+    if (mappedVariantCount > MAX_TRY_ON_MODELS) {
+      throw new Error(`Try-on supports at most ${MAX_TRY_ON_MODELS} mapped variants per product`);
     }
     return true;
   })
@@ -256,6 +292,11 @@ exports.createProductRules = [
   body('presetCombo.frameProductId').optional().isMongoId(),
   body('presetCombo.lensProductId').optional().isMongoId(),
   body('presetCombo.defaultNonPrescription').optional().isBoolean(),
+  body('storeScope.mode').optional().isIn(STORE_SCOPE_MODES),
+  body('storeScope.primaryStoreId').optional().isMongoId(),
+  body('storeScope.storeIds').optional().isArray(),
+  body('storeScope.storeIds.*').optional().isMongoId(),
+  body('storeScope.note').optional().isString().isLength({ max: 200 }),
 
   // Pre-order (optional)
   body('preOrder.enabled').optional().isBoolean(),
@@ -266,6 +307,12 @@ exports.createProductRules = [
   body('preOrder.depositPercent').optional().isFloat({ min: 0, max: 100 }),
   body('preOrder.maxQuantityPerOrder').optional().isInt({ min: 1 }),
   body('preOrder.allowCod').optional().isBoolean(),
+  body('preOrder.shippingCollectionTiming')
+    .optional()
+    .isIn(PREORDER_SHIPPING_COLLECTION_TIMINGS)
+    .withMessage(
+      `preOrder.shippingCollectionTiming must be one of: ${PREORDER_SHIPPING_COLLECTION_TIMINGS.join(', ')}`
+    ),
   body('preOrder.note').optional().isString().isLength({ max: 200 }),
   body().custom((value, { req }) => {
     const po = req.body?.preOrder;
@@ -344,6 +391,11 @@ exports.updateProductRules = [
   body('presetCombo.frameProductId').optional().isMongoId(),
   body('presetCombo.lensProductId').optional().isMongoId(),
   body('presetCombo.defaultNonPrescription').optional().isBoolean(),
+  body('storeScope.mode').optional().isIn(STORE_SCOPE_MODES),
+  body('storeScope.primaryStoreId').optional().isMongoId(),
+  body('storeScope.storeIds').optional().isArray(),
+  body('storeScope.storeIds.*').optional().isMongoId(),
+  body('storeScope.note').optional().isString().isLength({ max: 200 }),
 
   // Pre-order (optional)
   body('preOrder.enabled').optional().isBoolean(),
@@ -354,6 +406,12 @@ exports.updateProductRules = [
   body('preOrder.depositPercent').optional().isFloat({ min: 0, max: 100 }),
   body('preOrder.maxQuantityPerOrder').optional().isInt({ min: 1 }),
   body('preOrder.allowCod').optional().isBoolean(),
+  body('preOrder.shippingCollectionTiming')
+    .optional()
+    .isIn(PREORDER_SHIPPING_COLLECTION_TIMINGS)
+    .withMessage(
+      `preOrder.shippingCollectionTiming must be one of: ${PREORDER_SHIPPING_COLLECTION_TIMINGS.join(', ')}`
+    ),
   body('preOrder.note').optional().isString().isLength({ max: 200 }),
   body().custom((value, { req }) => {
     const po = req.body?.preOrder;
@@ -388,6 +446,7 @@ exports.filterProductRules = [
   query('brand').optional().isString(),
   query('season').optional().isIn(SEASONS),
   query('compatibleWith').optional().isMongoId(),
+  query('storeId').optional().isMongoId(),
   query('search').optional().isString(),
   query('sort').optional().isString()
 ];

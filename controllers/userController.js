@@ -14,7 +14,8 @@ exports.getAllUsers = asyncHandler(async (req, res) => {
   const result = await userService.getAllUsers(
     parseInt(page),
     parseInt(limit),
-    { role, search }
+    { role, search },
+    req.user
   );
   
   ApiResponse.paginate(
@@ -56,7 +57,7 @@ exports.changePassword = asyncHandler(async (req, res) => {
 
 // Get user statistics
 exports.getUserStats = asyncHandler(async (req, res) => {
-  const stats = await userService.getUserStats();
+  const stats = await userService.getUserStats(req.user);
   ApiResponse.success(res, stats, 'User statistics retrieved successfully');
 });
 

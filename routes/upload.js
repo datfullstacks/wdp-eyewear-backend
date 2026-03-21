@@ -135,7 +135,7 @@ const normalizeFolderPath = (value = '') => {
 router.post(
   '/',
   protect,
-  authorize('manager', 'operations'),
+  authorize('customer', 'sales', 'operations', 'manager', 'admin'),
   uploadSingleFile,
   async (req, res) => {
     try {

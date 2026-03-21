@@ -50,6 +50,14 @@ const shippingRules = [
     .optional()
     .isIn(['ready_stock', 'pre_order'])
     .withMessage('cartType must be ready_stock or pre_order'),
+  body(['storeId', 'store_id'])
+    .optional({ nullable: true, checkFalsy: true })
+    .isMongoId()
+    .withMessage('storeId must be a valid id'),
+  body(['paymentMethod', 'payment_method'])
+    .optional()
+    .isIn(['sepay', 'cod'])
+    .withMessage('paymentMethod must be sepay or cod'),
   body(['voucherCode', 'voucher_code'])
     .optional()
     .isString()

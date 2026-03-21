@@ -1,7 +1,116 @@
 const SupportTicket = require('../models/SupportTicket');
+const Order = require('../models/Order');
 const AppError = require('../errors/AppError');
 const { isBusinessUser } = require('../helpers/roles');
+const { buildStoreScopedQuery } = require('../helpers/storeAccess');
 const { publishStatusChange } = require('../helpers/statusEvents');
+
+function formatCurrencyNumber(value) {
+  return Math.round(Number(value || 0));
+}
+
+function buildRefundBreakdown(value) {
+  return {
+    itemAmount: formatCurrencyNumber(value?.itemAmount || 0),
+    shippingFeeAmount: formatCurrencyNumber(value?.shippingFeeAmount || 0),
+    returnShippingFeeAmount: formatCurrencyNumber(value?.returnShippingFeeAmount || 0),
+    total: formatCurrencyNumber(value?.total || 0),
+  };
+}
+
+function resolveRefundMethod(order, bankInfo) {
+  if (bankInfo?.accountNumber || bankInfo?.bankName) {
+    return 'bank_transfer';
+  }
+
+  switch (String(order?.paymentMethod || '').trim().toLowerCase()) {
+    case 'credit_card':
+      return 'card';
+    case 'cash':
+    case 'cod':
+      return 'cash';
+    case 'e_wallet':
+      return 'wallet';
+    default:
+      return 'bank_transfer';
+  }
+}
+
+function buildRefundReference(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9]/g, '')
+    .toUpperCase();
+  return `RF-${(normalized || 'UNKNOWN').slice(-8)}`;
+}
+
+function mapRefundCase(order) {
+  const requestedBreakdown = buildRefundBreakdown(order?.refund?.requestedBreakdown);
+  const approvedBreakdown = buildRefundBreakdown(order?.refund?.approvedBreakdown);
+  const bankInfo = order?.refund?.bankAccount || null;
+  const amount =
+    approvedBreakdown.total ||
+    requestedBreakdown.total ||
+    formatCurrencyNumber(order?.refund?.amount || 0) ||
+    formatCurrencyNumber(order?.paidAmount || 0) ||
+    formatCurrencyNumber(order?.total || 0);
+
+  return {
+    orderInternalId: String(order?._id || ''),
+    id: buildRefundReference(order?.paymentCode || order?._id),
+    orderId: String(order?.paymentCode || order?._id || ''),
+    customerName: String(order?.shippingAddress?.fullName || '').trim() || 'Customer',
+    customerPhone: String(order?.shippingAddress?.phone || '').trim(),
+    amount,
+    reason: String(order?.refund?.reason || '').trim() || 'Khach yeu cau hoan tien',
+    method: resolveRefundMethod(order, bankInfo),
+    paymentMethod: String(order?.paymentMethod || '').trim().toLowerCase(),
+    status: String(order?.refund?.status || 'none').trim().toLowerCase(),
+    createdAt: order?.refund?.requestedAt || order?.createdAt || null,
+    processedAt: order?.refund?.processedAt || null,
+    bankInfo: bankInfo
+      ? {
+          bankName: String(bankInfo.bankName || '').trim(),
+          accountNumber: String(bankInfo.accountNumber || '').trim(),
+          accountHolder: String(bankInfo.accountHolder || '').trim(),
+          note: String(bankInfo.note || '').trim(),
+        }
+      : undefined,
+    notes:
+      String(order?.refund?.decisionNote || '').trim() ||
+      String(order?.refund?.contactNote || '').trim() ||
+      String(order?.refund?.rejectReason || '').trim() ||
+      String(order?.note || '').trim(),
+    responsibility: String(order?.refund?.responsibility || '').trim().toLowerCase() || undefined,
+    requiresReturn: Boolean(order?.refund?.requiresReturn),
+    requestedBreakdown,
+    approvedBreakdown,
+    rejectReason: String(order?.refund?.rejectReason || '').trim(),
+    decisionNote: String(order?.refund?.decisionNote || '').trim(),
+    escalateReason: String(order?.refund?.escalateReason || '').trim(),
+    currentOwnerRole: String(order?.refund?.currentOwnerRole || 'none').trim().toLowerCase(),
+    currentOwnerUserId: order?.refund?.currentOwnerUserId
+      ? String(order.refund.currentOwnerUserId)
+      : undefined,
+    nextActionCode: String(order?.refund?.nextActionCode || '').trim().toLowerCase(),
+    inspectionStatus: String(order?.refund?.inspectionStatus || 'not_required')
+      .trim()
+      .toLowerCase(),
+    inspectionNote: String(order?.refund?.inspectionNote || '').trim(),
+    inspectionAt: order?.refund?.inspectionAt || null,
+    returnShipmentCode: String(order?.refund?.returnShipmentCode || '').trim(),
+    returnCarrier: String(order?.refund?.returnCarrier || '').trim().toLowerCase(),
+    returnReceivedAt: order?.refund?.returnReceivedAt || null,
+    transactionRef: String(order?.refund?.transactionRef || '').trim(),
+    payoutProofUrl: String(order?.refund?.payoutProofUrl || '').trim(),
+    evidence: Array.isArray(order?.refund?.evidence)
+      ? order.refund.evidence
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      : [],
+    history: Array.isArray(order?.refund?.history) ? order.refund.history : [],
+  };
+}
 
 class SupportService {
   normalizeCreatePayload(payload = {}) {
@@ -158,6 +267,70 @@ class SupportService {
     });
 
     return ticket;
+  }
+
+  async listRefundCases(currentUser, options = {}) {
+    if (!currentUser) throw new AppError('Unauthorized', 401);
+    if (!isBusinessUser(currentUser) && currentUser.role !== 'admin') {
+      throw new AppError('Forbidden', 403);
+    }
+
+    const page = Math.max(1, Number(options.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(options.limit) || 20));
+    const skip = (page - 1) * limit;
+    const status = String(options.status || '').trim().toLowerCase();
+    const ownerRole = String(options.ownerRole || options.owner_role || '')
+      .trim()
+      .toLowerCase();
+    const search = String(options.q || options.search || '').trim().toLowerCase();
+
+    const query = {
+      'refund.status': { $nin: [null, 'none'] },
+      ...buildStoreScopedQuery(currentUser, 'storeId'),
+    };
+
+    if (status) {
+      query['refund.status'] = status;
+    }
+
+    if (ownerRole) {
+      query['refund.currentOwnerRole'] = ownerRole;
+    }
+
+    if (search) {
+      query.$or = [
+        { paymentCode: { $regex: search, $options: 'i' } },
+        { 'shippingAddress.fullName': { $regex: search, $options: 'i' } },
+        { 'shippingAddress.phone': { $regex: search, $options: 'i' } },
+        { 'refund.reason': { $regex: search, $options: 'i' } },
+        { 'refund.status': { $regex: search, $options: 'i' } },
+        { 'refund.currentOwnerRole': { $regex: search, $options: 'i' } },
+        { 'refund.nextActionCode': { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const [orders, total] = await Promise.all([
+      Order.find(query)
+        .select(
+          '_id paymentCode paymentMethod total paidAmount note createdAt shippingAddress refund',
+        )
+        .sort({ 'refund.requestedAt': -1, updatedAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Order.countDocuments(query),
+    ]);
+
+    const rows = orders.map(mapRefundCase);
+
+    return {
+      cases: rows,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 }
 

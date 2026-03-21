@@ -5,8 +5,13 @@
   "scripts": {
     "start": "node ./bin/www",
     "dev": "nodemon ./bin/www",
-    "test": "echo \"No tests yet\"",
-    "lint": "eslint ."
+    "test": "node --test \"tests/**/*.test.js\"",
+    "lint": "eslint .",
+    "catalog:normalize": "node ./scripts/normalize-product-catalog.js",
+    "stores:backfill": "node ./scripts/backfill-store-network.js",
+    "stores:seed": "node ./scripts/seed-store-network.js",
+    "stores:reset": "node ./scripts/reset-store-network.js",
+    "stores:configure": "node ./scripts/configure-store-network.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.93.3",
