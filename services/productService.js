@@ -130,6 +130,14 @@ const collect3dFormats = (assets = []) => {
   return formats;
 };
 
+const hasGlbLikeFormat = (formats = new Set()) => formats.has('glb') || formats.has('gltf');
+const isUsdzAsset = (asset) =>
+  asset &&
+  asset.assetType === '3d' &&
+  String(asset.format || '')
+    .trim()
+    .toLowerCase() === 'usdz';
+
 const managedTryOnAuditFields = [
   'submittedBy',
   'submittedAt',
@@ -142,6 +150,46 @@ const managedTryOnAuditFields = [
 ];
 
 class ProductService {
+  stripLegacyUsdzAssets(payload) {
+    if (!isPlainObject(payload?.media)) return;
+
+    const removedAssetIds = new Set();
+
+    if (Array.isArray(payload.media.assets)) {
+      payload.media.assets = payload.media.assets
+        .filter((asset) => {
+          const shouldKeep = !isUsdzAsset(asset);
+          if (!shouldKeep && asset?._id) {
+            removedAssetIds.add(String(asset._id));
+          }
+          return shouldKeep;
+        })
+        .map((asset) => {
+          if (!isPlainObject(asset)) return asset;
+          const normalizedAsset = { ...asset };
+          if (isPlainObject(normalizedAsset.ar) && 'usdzUrl' in normalizedAsset.ar) {
+            delete normalizedAsset.ar.usdzUrl;
+          }
+          if ('ar.usdzUrl' in normalizedAsset) {
+            delete normalizedAsset['ar.usdzUrl'];
+          }
+          return normalizedAsset;
+        });
+    }
+
+    if (!isPlainObject(payload.media.tryOn)) return;
+
+    if ('usdzUrl' in payload.media.tryOn) {
+      delete payload.media.tryOn.usdzUrl;
+    }
+
+    if (Array.isArray(payload.media.tryOn.assetIds) && removedAssetIds.size > 0) {
+      payload.media.tryOn.assetIds = payload.media.tryOn.assetIds.filter(
+        (assetId) => !removedAssetIds.has(String(assetId))
+      );
+    }
+  }
+
   async normalizeStoreScope(storeScopeInput = {}) {
     if (!isPlainObject(storeScopeInput)) {
       return { mode: 'all', primaryStoreId: undefined, storeIds: [], note: '' };
@@ -287,9 +335,9 @@ class ProductService {
       ? productSnapshot.media.assets
       : [];
     const formats = collect3dFormats(assets);
-    if (!formats.has('glb') || !formats.has('usdz')) {
+    if (!hasGlbLikeFormat(formats)) {
       throw new AppError(
-        'media.assets must include 3d assets with both glb and usdz formats before publishing try-on',
+        'media.assets must include at least one GLB/GLTF 3d asset before publishing try-on',
         400
       );
     }
@@ -320,9 +368,9 @@ class ProductService {
     }
 
     const tryOnFormats = collect3dFormats(tryOnAssets);
-    if (!tryOnFormats.has('glb') || !tryOnFormats.has('usdz')) {
+    if (!hasGlbLikeFormat(tryOnFormats)) {
       throw new AppError(
-        'Try-on assetIds must include 3d assets with both glb and usdz formats before publishing',
+        'Try-on assetIds must include at least one GLB/GLTF 3d asset before publishing',
         400
       );
     }
@@ -467,6 +515,7 @@ class ProductService {
     }
 
     await this.applyNormalizedStoreScope(payload);
+    this.stripLegacyUsdzAssets(payload);
     this.enforceTryOnRulesOnCreate(payload, currentUser);
 
     const product = await Product.create(payload);
@@ -609,6 +658,7 @@ class ProductService {
       payload.slug = slugify(payload.name);
     }
     await this.applyNormalizedStoreScope(payload);
+    this.stripLegacyUsdzAssets(payload);
 
     const existingSnapshot = product.toObject({ depopulate: true });
     const mergedSnapshot = deepMerge(existingSnapshot, payload);

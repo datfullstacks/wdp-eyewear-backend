@@ -10,10 +10,9 @@ const ALLOWED_MIME_TYPES = new Set([
   'image/png',
   'image/webp',
   'model/gltf-binary',
-  'model/gltf+json',
-  'model/vnd.usdz+zip'
+  'model/gltf+json'
 ]);
-const ALLOWED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.glb', '.gltf', '.usdz']);
+const ALLOWED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.glb', '.gltf']);
 const MAX_UPLOAD_SIZE_MB = Number(process.env.UPLOAD_MAX_SIZE_MB || 25);
 const MAX_UPLOAD_SIZE_BYTES = Number.isFinite(MAX_UPLOAD_SIZE_MB) && MAX_UPLOAD_SIZE_MB > 0
   ? Math.floor(MAX_UPLOAD_SIZE_MB * 1024 * 1024)
@@ -28,7 +27,7 @@ const isFileTypeAllowed = (file = {}) => {
 
   // Some clients upload 3D files with a generic MIME type.
   if (mime === 'application/octet-stream') {
-    return ['.glb', '.gltf', '.usdz'].includes(ext);
+    return ['.glb', '.gltf'].includes(ext);
   }
 
   return false;
@@ -39,7 +38,7 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
   fileFilter: (req, file, cb) => {
     if (!isFileTypeAllowed(file)) {
-      return cb(new Error('Unsupported file type. Allowed: jpg, png, webp, glb, gltf, usdz'));
+      return cb(new Error('Unsupported file type. Allowed: jpg, png, webp, glb, gltf'));
     }
     return cb(null, true);
   }
