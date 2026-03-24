@@ -17,9 +17,32 @@ const GHN_ACTION = {
   DELIVERY_AGAIN: "delivery_again",
 };
 
+const ALL_ROLES = Object.freeze(Object.values(ROLE));
 const VALID_ROLES = new Set(Object.values(ROLE));
 const BUSINESS_ROLES = new Set([ROLE.STAFF, ROLE.OPERATION, ROLE.MANAGER]);
 const CUSTOMER_READONLY_ROLES = new Set([ROLE.STAFF, ROLE.OPERATION]);
+const SYSTEM_ADMIN_ROLES = Object.freeze([ROLE.ADMIN]);
+const BUSINESS_MANAGER_ROLES = Object.freeze([ROLE.MANAGER]);
+const BUSINESS_STAFF_ROLES = Object.freeze([
+  ROLE.MANAGER,
+  ROLE.OPERATION,
+  ROLE.STAFF,
+]);
+const POLICY_GOVERNANCE_ROLES = Object.freeze([ROLE.MANAGER]);
+const USER_READ_SCOPE = Object.freeze({
+  [ROLE.ADMIN]: [],
+  [ROLE.MANAGER]: [ROLE.CUSTOMER, ROLE.STAFF, ROLE.OPERATION],
+  [ROLE.STAFF]: [ROLE.CUSTOMER],
+  [ROLE.OPERATION]: [ROLE.CUSTOMER],
+  [ROLE.CUSTOMER]: [],
+});
+const USER_MANAGEMENT_SCOPE = Object.freeze({
+  [ROLE.ADMIN]: [],
+  [ROLE.MANAGER]: [ROLE.CUSTOMER, ROLE.STAFF, ROLE.OPERATION],
+  [ROLE.STAFF]: [],
+  [ROLE.OPERATION]: [],
+  [ROLE.CUSTOMER]: [],
+});
 const GHN_ROLE_MATRIX = Object.freeze({
   [ROLE.CUSTOMER]: [],
   [ROLE.STAFF]: [GHN_ACTION.VIEW_TRACKING],
@@ -85,9 +108,16 @@ function isBusinessUser(user) {
   return BUSINESS_ROLES.has(getRole(user));
 }
 
+function getListableUserRoles(user) {
+  return [...(USER_READ_SCOPE[getRole(user)] || [])];
+}
+
+function getManageableUserRoles(user) {
+  return [...(USER_MANAGEMENT_SCOPE[getRole(user)] || [])];
+}
+
 function canReadUsersList(user) {
-  const role = getRole(user);
-  return CUSTOMER_READONLY_ROLES.has(role) || isManager(user) || isAdmin(user);
+  return getListableUserRoles(user).length > 0;
 }
 
 function canReadOnlyCustomers(user) {
@@ -95,22 +125,13 @@ function canReadOnlyCustomers(user) {
 }
 
 function canManageUserRole(actor, targetRole) {
-  const actorRole = getRole(actor);
   const normalizedTargetRole = normalizeRole(targetRole);
 
   if (!VALID_ROLES.has(normalizedTargetRole)) {
     return false;
   }
 
-  if (actorRole === ROLE.ADMIN) {
-    return true;
-  }
-
-  if (actorRole === ROLE.MANAGER) {
-    return normalizedTargetRole !== ROLE.ADMIN;
-  }
-
-  return false;
+  return getManageableUserRoles(actor).includes(normalizedTargetRole);
 }
 
 function canReadUserRecord(actor, targetUser) {
@@ -124,15 +145,7 @@ function canReadUserRecord(actor, targetUser) {
     return true;
   }
 
-  if (isAdmin(actor) || isManager(actor)) {
-    return true;
-  }
-
-  if (canReadOnlyCustomers(actor)) {
-    return getRole(targetUser) === ROLE.CUSTOMER;
-  }
-
-  return false;
+  return getListableUserRoles(actor).includes(getRole(targetUser));
 }
 
 function canDeleteUser(actor, targetUser) {
@@ -149,15 +162,7 @@ function canDeleteUser(actor, targetUser) {
     return false;
   }
 
-  if (actorRole === ROLE.ADMIN) {
-    return true;
-  }
-
-  if (actorRole === ROLE.MANAGER) {
-    return targetRole !== ROLE.ADMIN;
-  }
-
-  return false;
+  return (USER_MANAGEMENT_SCOPE[actorRole] || []).includes(targetRole);
 }
 
 function getGhnRoleMatrix() {
@@ -192,9 +197,16 @@ function canAccessGhnAction(user, action) {
 module.exports = {
   ROLE,
   GHN_ACTION,
+  ALL_ROLES,
   VALID_ROLES,
   BUSINESS_ROLES,
   CUSTOMER_READONLY_ROLES,
+  SYSTEM_ADMIN_ROLES,
+  BUSINESS_MANAGER_ROLES,
+  BUSINESS_STAFF_ROLES,
+  POLICY_GOVERNANCE_ROLES,
+  USER_READ_SCOPE,
+  USER_MANAGEMENT_SCOPE,
   GHN_ROLE_MATRIX,
   normalizeRole,
   getRole,
@@ -205,6 +217,8 @@ module.exports = {
   isManager,
   isAdmin,
   isBusinessUser,
+  getListableUserRoles,
+  getManageableUserRoles,
   canReadUsersList,
   canReadOnlyCustomers,
   canManageUserRole,

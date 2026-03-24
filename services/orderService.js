@@ -19,7 +19,6 @@ const {
   isStaff: isStaffRole,
   isOperation,
   isManager,
-  isAdmin,
   getUserId,
   getRole,
 } = require("../helpers/roles");
@@ -43,6 +42,7 @@ const {
   restoreOrderInventory,
 } = require("../helpers/orderInventory");
 const promotionService = require("./promotionService");
+const promotionRedemptionService = require("./promotionRedemptionService");
 const shippingQuoteService = require("./shippingQuoteService");
 
 const PRESCRIPTION_MODES = new Set(["none", "manual", "upload"]);
@@ -225,7 +225,7 @@ async function resolveOrderStoreId({ requestedStoreId, currentUser }) {
 }
 
 function assertBusinessUserCanAccessOrder(order, currentUser) {
-  if (!currentUser || !isStaff(currentUser) || isAdmin(currentUser)) {
+  if (!currentUser || !isStaff(currentUser)) {
     return;
   }
 
@@ -335,7 +335,11 @@ function normalizeOptionalEnum(value, allowedSet, fieldName) {
   if (value === undefined) return undefined;
   if (value === null || value === "") return null;
   const normalized = toTrimmedString(value).toLowerCase();
-  if (!allowedSet.has(normalized)) {
+  const allowedValues =
+    allowedSet instanceof Set
+      ? allowedSet
+      : new Set(Array.isArray(allowedSet) ? allowedSet : []);
+  if (!allowedValues.has(normalized)) {
     throw new AppError(`${fieldName} is invalid`, 400);
   }
   return normalized;
@@ -695,7 +699,6 @@ function getRefundManagerApprovalReasons(
 
 function getRefundActorRole(currentUser, { isOwner = false } = {}) {
   if (isOwner) return "customer";
-  if (isAdmin(currentUser)) return "admin";
   if (isManager(currentUser)) return "manager";
   if (isOperation(currentUser)) return "operations";
   if (isStaffRole(currentUser)) return "sales";
@@ -916,6 +919,25 @@ function normalizeOpsExecutionPatch(payload = {}) {
   if (Object.prototype.hasOwnProperty.call(payload, "salesHandoffNote")) {
     patch.salesHandoffNote = toTrimmedString(payload.salesHandoffNote);
   }
+  if (Object.prototype.hasOwnProperty.call(payload, "approvalState")) {
+    patch.approvalState = normalizeOptionalEnum(
+      payload.approvalState,
+      ["none", "manager_review_requested", "sent_back_to_sale"],
+      "approvalState",
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "managerReviewRequestedAt")) {
+    patch.managerReviewRequestedAt = normalizeOptionalDate(
+      payload.managerReviewRequestedAt,
+      "managerReviewRequestedAt",
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "managerReviewRequestedBy")) {
+    patch.managerReviewRequestedBy = toTrimmedString(payload.managerReviewRequestedBy);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "managerReviewReason")) {
+    patch.managerReviewReason = toTrimmedString(payload.managerReviewReason);
+  }
   if (Object.prototype.hasOwnProperty.call(payload, "internalNote")) {
     patch.internalNote = toTrimmedString(payload.internalNote);
   }
@@ -973,6 +995,18 @@ function applyOpsExecutionPatch(order, patch) {
   }
   if (patch.salesHandoffNote !== undefined) {
     opsExecution.salesHandoffNote = patch.salesHandoffNote;
+  }
+  if (patch.approvalState !== undefined) {
+    opsExecution.approvalState = patch.approvalState;
+  }
+  if (patch.managerReviewRequestedAt !== undefined) {
+    opsExecution.managerReviewRequestedAt = patch.managerReviewRequestedAt;
+  }
+  if (patch.managerReviewRequestedBy !== undefined) {
+    opsExecution.managerReviewRequestedBy = patch.managerReviewRequestedBy;
+  }
+  if (patch.managerReviewReason !== undefined) {
+    opsExecution.managerReviewReason = patch.managerReviewReason;
   }
   if (patch.internalNote !== undefined) {
     opsExecution.internalNote = patch.internalNote;
@@ -1171,8 +1205,11 @@ function assertOrderStatusPermission(currentUser, nextStatus) {
     throw new AppError("Use cancel endpoint to cancel orders", 400);
   }
 
-  if (isAdmin(currentUser) || isManager(currentUser)) {
-    return;
+  if (isManager(currentUser)) {
+    if (nextStatus === ORDER_STATUS.CONFIRMED) {
+      return;
+    }
+    throw new AppError("Manager can only confirm escalated orders", 403);
   }
 
   if (isStaffRole(currentUser)) {
@@ -1199,16 +1236,49 @@ function assertOrderStatusPermission(currentUser, nextStatus) {
   throw new AppError("Forbidden", 403);
 }
 
-function assertOrderCanBeConfirmed(order) {
+function assertOrderCanBeConfirmed(order, currentUser) {
   if (!order) {
     throw new AppError("Order not found", 404);
   }
 
-  if (
-    String(order.paymentStatus || "")
-      .trim()
-      .toLowerCase() !== PAYMENT_STATUS.PAID
-  ) {
+  const normalizedPaymentStatus = String(order.paymentStatus || "")
+    .trim()
+    .toLowerCase();
+  const normalizedApprovalState = String(order?.opsExecution?.approvalState || "")
+    .trim()
+    .toLowerCase();
+
+  if (isManager(currentUser)) {
+    if (
+      normalizedPaymentStatus === PAYMENT_STATUS.FAILED ||
+      normalizedPaymentStatus === PAYMENT_STATUS.REFUNDED
+    ) {
+      throw new AppError("Failed or refunded orders cannot be confirmed", 400);
+    }
+
+    if (normalizedApprovalState !== "manager_review_requested") {
+      throw new AppError("Manager can only confirm escalated orders", 403);
+    }
+
+    if (
+      normalizedPaymentStatus !== PAYMENT_STATUS.PAID &&
+      normalizeCheckoutPaymentMethod(order.paymentMethod, "") !==
+        PAYMENT_METHODS.COD
+    ) {
+      throw new AppError(
+        "Manager can only confirm fully paid or COD escalated orders",
+        400,
+      );
+    }
+
+    return;
+  }
+
+  if (normalizedApprovalState === "manager_review_requested") {
+    throw new AppError("This order is waiting for manager review", 403);
+  }
+
+  if (normalizedPaymentStatus !== PAYMENT_STATUS.PAID) {
     throw new AppError("Only fully paid orders can be confirmed", 400);
   }
 }
@@ -1237,10 +1307,6 @@ function publishOpsStageChange(order, previousOpsStage, currentUser) {
 
 function assertRefundActionPermission(currentUser, action, options = {}) {
   if (options.isOwner && action === REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO) {
-    return;
-  }
-
-  if (isAdmin(currentUser)) {
     return;
   }
 
@@ -1664,6 +1730,29 @@ function applyQuoteResultToOrder(order, quoteResult) {
   order.shippingCollectionTiming = quoteResult.shippingCollectionTiming || "upfront";
   order.shippingFeeMode = quoteResult.shippingFeeMode || "estimated";
   order.voucherCode = quoteResult.voucherCode || "";
+  order.promotionApplied = buildOrderPromotionSnapshot(quoteResult);
+}
+
+function buildOrderPromotionSnapshot(quoteResult = {}) {
+  if (!quoteResult?.promotion || !quoteResult?.voucherCode) {
+    return null;
+  }
+
+  return {
+    promotionId: quoteResult.promotion.id || null,
+    code: quoteResult.promotion.code || quoteResult.voucherCode || "",
+    name: quoteResult.promotion.name || "",
+    type: quoteResult.promotion.type || "",
+    value: Number(quoteResult.promotion.value || 0),
+    maxDiscount: Number(quoteResult.promotion.maxDiscount || 0),
+    minOrderValue: Number(quoteResult.promotion.minOrderValue || 0),
+    cartType: quoteResult.promotion.cartType || "all",
+    paymentScope: quoteResult.promotion.paymentScope || "all",
+    applicableCategories: Array.isArray(quoteResult.promotion.applicableCategories)
+      ? quoteResult.promotion.applicableCategories
+      : [],
+    discountAmountApplied: Number(quoteResult.discountAmount || 0),
+  };
 }
 
 function normalizeEye(eye = {}, fallback = "0") {
@@ -1901,6 +1990,20 @@ function mapOrderItemsToInput(items = []) {
   }));
 }
 
+function itemRequiresPrescriptionWorkflow(item = {}) {
+  const productType = toTrimmedString(item.type, "").toLowerCase();
+  const prescriptionMode = toTrimmedString(
+    item?.customization?.prescription?.mode,
+    "none",
+  ).toLowerCase();
+
+  return (
+    prescriptionMode !== "none" ||
+    Boolean(item?.customization?.orderMadeFromPrescriptionImage) ||
+    productType === "lens"
+  );
+}
+
 function mergeCustomization(base = {}, patch = {}) {
   const next = {
     ...(base || {}),
@@ -1949,12 +2052,19 @@ function mapInvoiceItemsFromOrder(order) {
 function inferOrderType(items = []) {
   const hasPreOrder = items.some((item) => item.preOrder);
   const hasReadyStock = items.some((item) => !item.preOrder);
+  const hasPrescriptionWorkflow = items.some((item) =>
+    itemRequiresPrescriptionWorkflow(item),
+  );
 
   if (hasPreOrder && hasReadyStock) {
     throw new AppError(
       "Pre-order items and ready-stock items must be checked out separately",
       400,
     );
+  }
+
+  if (hasPrescriptionWorkflow) {
+    return ORDER_TYPES.PRESCRIPTION;
   }
 
   return hasPreOrder ? ORDER_TYPES.PRE_ORDER : ORDER_TYPES.READY_STOCK;
@@ -2267,6 +2377,10 @@ async function quote(
   });
   const { subtotal } = sumAmounts(items);
   const voucherCode = normalizeVoucherCode(options.voucherCode || null);
+  const requestedPaymentMethod = normalizeCheckoutPaymentMethod(
+    options.paymentMethod,
+    PAYMENT_METHODS.SEPAY,
+  );
   const shippingCollectionTiming = resolveOrderShippingCollectionTiming(items);
   const normalizedShippingMethod = toTrimmedString(
     options.shippingMethod || "standard",
@@ -2293,11 +2407,17 @@ async function quote(
       voucherCode,
       subtotal,
       cartType: options.cartType || null,
+      items,
+      paymentMethod: requestedPaymentMethod,
+      excludeOrderId: options.orderId || "",
       throwOnInvalid: true,
     });
 
     discountValue = resolvedPromotion.discountAmount;
-    promotion = promotionService.toPromotionMeta(resolvedPromotion.promotion);
+    promotion = promotionService.toPromotionMeta(
+      resolvedPromotion.promotion,
+      resolvedPromotion.usageSummary,
+    );
     appliedVoucherCode = resolvedPromotion.voucherCode;
   }
 
@@ -2340,10 +2460,6 @@ async function quote(
     shippingCollectionTiming,
   );
   const total = subtotal - discounted.discountAmount + shippingFeeValue;
-  const requestedPaymentMethod = normalizeCheckoutPaymentMethod(
-    options.paymentMethod,
-    PAYMENT_METHODS.SEPAY,
-  );
   const hasPreOrderItems = items.some((item) => Boolean(item?.preOrder));
   let effectiveItems = discounted.items;
   let effectiveShippingCollectionTiming = shippingCollectionTiming;
@@ -2484,6 +2600,7 @@ async function createOrder({
     shippingFeeMode: quoteResult.shippingFeeMode || "estimated",
     shippingAddress: resolvedShippingAddress,
     voucherCode: quoteResult.voucherCode || undefined,
+    promotionApplied: buildOrderPromotionSnapshot(quoteResult),
     note,
     paymentCode,
     orderType,
@@ -2501,11 +2618,20 @@ async function createOrder({
     const invoice = await createInvoiceFromOrder(order);
     order.invoiceId = invoice._id;
     await order.save();
+    await promotionRedemptionService.syncOrderPromotionRedemption(order);
     return { order, quote: quoteResult, invoice };
   } catch (error) {
     if (inventoryCommitted) {
       await restoreOrderInventory(order, userId);
     }
+    await promotionRedemptionService
+      .releasePromotionRedemptionsForOrder(order._id, {
+        releaseReason: "order_create_failed",
+        orderStatus: order?.status,
+        paymentStatus: order?.paymentStatus,
+        paymentMethod: order?.paymentMethod,
+      })
+      .catch(() => null);
     await Order.findByIdAndDelete(order._id);
     throw error;
   }
@@ -2525,10 +2651,12 @@ async function markPaidBySepay(paymentCode, amount, transactionId, webhookId) {
     Array.isArray(order.sepayWebhookIds) &&
     order.sepayWebhookIds.includes(String(webhookId))
   ) {
+    await promotionRedemptionService.syncOrderPromotionRedemption(order);
     return Order.findById(order._id).populate(ORDER_POPULATE);
   }
 
   if (transactionId && order.sepayTransactionId === transactionId) {
+    await promotionRedemptionService.syncOrderPromotionRedemption(order);
     return Order.findById(order._id).populate(ORDER_POPULATE);
   }
 
@@ -2558,6 +2686,7 @@ async function markPaidBySepay(paymentCode, amount, transactionId, webhookId) {
   syncInvoiceByOrderState(invoice, order, transactionId);
 
   await Promise.all([order.save(), invoice.save()]);
+  await promotionRedemptionService.syncOrderPromotionRedemption(order);
   return Order.findById(order._id).populate(ORDER_POPULATE);
 }
 
@@ -2639,6 +2768,7 @@ async function updateOrderItems(id, currentUser, payload = {}) {
     voucherCode,
     shippingMethod: nextShippingMethod,
     shippingAddress: nextShippingAddress,
+    orderId: order._id,
     storeId: order.storeId || null,
     currentUser,
   });
@@ -2749,6 +2879,9 @@ async function updateOrderItems(id, currentUser, payload = {}) {
   syncInvoiceByOrderState(invoice, order);
 
   await Promise.all([order.save(), invoice.save()]);
+  await promotionRedemptionService.syncOrderPromotionRedemption(order, {
+    releaseReason: "order_updated",
+  });
   return Order.findById(order._id).populate(ORDER_POPULATE);
 }
 
@@ -2839,6 +2972,7 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
     voucherCode,
     shippingMethod: order.shippingMethod || "standard",
     shippingAddress: order.shippingAddress || null,
+    orderId: order._id,
     storeId: order.storeId || null,
     currentUser,
   });
@@ -2895,6 +3029,9 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
   syncInvoiceByOrderState(invoice, order);
 
   await Promise.all([order.save(), invoice.save()]);
+  await promotionRedemptionService.syncOrderPromotionRedemption(order, {
+    releaseReason: "order_updated",
+  });
 
   const updatedOrder = await Order.findById(order._id).populate(ORDER_POPULATE);
   const updatedItems = Array.isArray(updatedOrder?.items)
@@ -3155,6 +3292,9 @@ async function cancelOrder(id, currentUser, payload = {}) {
   const paidReceived = paidAmount > 0;
   const invoice = await ensureOrderInvoice(order);
   const previousInvoiceStatus = invoice.status;
+  const explicitCancelResponsibility = normalizeRefundResponsibility(
+    payload.responsibility,
+  );
 
   if (paidReceived) {
     const previousRefundStatus = order.refund?.status || "none";
@@ -3185,7 +3325,8 @@ async function cancelOrder(id, currentUser, payload = {}) {
         ),
         bankAccount: bankAccount || undefined,
         contactChannels: channels.length > 0 ? channels : ["email"],
-        responsibility: "mixed",
+        responsibility:
+          explicitCancelResponsibility || (owner ? "customer" : undefined),
         requiresReturn: false,
       },
     );
@@ -3211,6 +3352,11 @@ async function cancelOrder(id, currentUser, payload = {}) {
 
   syncInvoiceByOrderState(invoice, order);
   await Promise.all([order.save(), invoice.save()]);
+  await promotionRedemptionService.syncOrderPromotionRedemption(order, {
+    releaseReason: "order_cancelled",
+    responsibility: explicitCancelResponsibility,
+    responsibilityExplicit: explicitCancelResponsibility !== undefined,
+  });
 
   publishStatusChange({
     domain: "order",
@@ -3296,7 +3442,6 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
 
   if (
     !isStaff(currentUser) &&
-    !isAdmin(currentUser) &&
     !(isOwner && requestedAction === REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO)
   ) {
     throw new AppError("Forbidden", 403);
@@ -3651,6 +3796,11 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
   syncInvoiceByOrderState(invoice, order);
 
   await Promise.all([order.save(), invoice.save()]);
+  await promotionRedemptionService.syncOrderPromotionRedemption(order, {
+    releaseReason: requestedAction === REFUND_ACTIONS.COMPLETE ? "refund_completed" : "",
+    responsibility,
+    responsibilityExplicit: responsibility !== undefined,
+  });
 
   publishStatusChange({
     domain: "order",
@@ -3703,7 +3853,7 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
 }
 
 async function overrideRefund(id, currentUser, payload = {}) {
-  if (!isAdmin(currentUser)) {
+  if (!isManager(currentUser)) {
     throw new AppError("Forbidden", 403);
   }
 
@@ -3784,7 +3934,7 @@ async function overrideRefund(id, currentUser, payload = {}) {
   appendRefundHistory(
     order,
     buildRefundHistoryEntry({
-      action: `admin_${action}`,
+      action: `manager_${action}`,
       fromStatus: previousRefundStatus,
       toStatus: nextStatus,
       currentUser,
@@ -3861,7 +4011,7 @@ async function updateOrderStatus(id, currentUser, status) {
   const previousOpsStage = order.opsStage;
 
   if (normalizedStatus === ORDER_STATUS.CONFIRMED) {
-    assertOrderCanBeConfirmed(order);
+    assertOrderCanBeConfirmed(order, currentUser);
   }
 
   order.status = normalizedStatus;
@@ -3872,6 +4022,10 @@ async function updateOrderStatus(id, currentUser, status) {
     const opsExecution = touchOpsExecution(order);
     opsExecution.salesApprovedAt = order.confirmedAt;
     opsExecution.salesApprovedBy = toDisplayName(currentUser, "Sales/Support");
+    opsExecution.approvalState = "none";
+    opsExecution.managerReviewRequestedAt = undefined;
+    opsExecution.managerReviewRequestedBy = "";
+    opsExecution.managerReviewReason = "";
   } else {
     syncOpsStageWithOrder(order);
   }
@@ -3880,6 +4034,10 @@ async function updateOrderStatus(id, currentUser, status) {
   await commitOrderInventory(order, getUserId(currentUser));
 
   await order.save();
+  await promotionRedemptionService.syncOrderPromotionRedemption(order, {
+    releaseReason:
+      normalizedStatus === ORDER_STATUS.CANCELLED ? "order_cancelled" : "",
+  });
   publishStatusChange({
     domain: "order",
     entityId: order._id,
@@ -3899,7 +4057,7 @@ async function updateOrderStatus(id, currentUser, status) {
 }
 
 async function updateOrderOpsStage(id, currentUser, stage) {
-  if (!isOperation(currentUser) && !isManager(currentUser)) {
+  if (!isOperation(currentUser)) {
     throw new AppError("Forbidden", 403);
   }
 
@@ -3983,10 +4141,6 @@ async function updateOrderOpsStage(id, currentUser, stage) {
 }
 
 async function updateOrderOpsExecution(id, currentUser, payload) {
-  if (!isOperation(currentUser) && !isManager(currentUser)) {
-    throw new AppError("Forbidden", 403);
-  }
-
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
   assertBusinessUserCanAccessOrder(order, currentUser);
@@ -3994,6 +4148,46 @@ async function updateOrderOpsExecution(id, currentUser, payload) {
   const patch = normalizeOpsExecutionPatch(payload);
   if (Object.keys(patch).length === 0) {
     throw new AppError("No ops execution fields to update", 400);
+  }
+
+  const allowedApprovalRoutingFields = new Set([
+    "approvalState",
+    "managerReviewRequestedAt",
+    "managerReviewRequestedBy",
+    "managerReviewReason",
+  ]);
+  const patchKeys = Object.keys(patch);
+  const staffOnlyApprovalRouting =
+    isStaffRole(currentUser) &&
+    patchKeys.every((key) => allowedApprovalRoutingFields.has(key));
+  const managerOnlyApprovalRouting =
+    isManager(currentUser) &&
+    patchKeys.every((key) => allowedApprovalRoutingFields.has(key));
+
+  if (
+    staffOnlyApprovalRouting &&
+    patch.approvalState !== undefined &&
+    patch.approvalState !== "manager_review_requested"
+  ) {
+    throw new AppError("Staff can only request manager review", 403);
+  }
+
+  if (
+    managerOnlyApprovalRouting &&
+    patch.approvalState !== undefined &&
+    !["manager_review_requested", "sent_back_to_sale", "none"].includes(
+      patch.approvalState,
+    )
+  ) {
+    throw new AppError("Invalid manager approval routing state", 400);
+  }
+
+  if (
+    !isOperation(currentUser) &&
+    !managerOnlyApprovalRouting &&
+    !staffOnlyApprovalRouting
+  ) {
+    throw new AppError("Forbidden", 403);
   }
 
   const previousUpdatedAt = order?.opsExecution?.lastUpdatedAt || null;

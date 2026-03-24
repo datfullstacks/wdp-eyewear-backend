@@ -43,33 +43,32 @@ const {
   validateId
 } = require('../validators/userValidator');
 const {
-  CUSTOMER_READONLY_ROLES,
-  getRole
+  canReadUsersList,
+  getListableUserRoles,
+  BUSINESS_MANAGER_ROLES,
 } = require('../helpers/roles');
 
 const authorizeUsersListRead = (req, res, next) => {
-  const role = getRole(req.user);
-
-  if (role === 'admin' || role === 'manager') {
-    return next();
-  }
-
-  if (!CUSTOMER_READONLY_ROLES.has(role)) {
+  if (!canReadUsersList(req.user)) {
     return res.status(403).json({
       success: false,
       message: `User role '${req.user?.role}' is not authorized to access this route`
     });
   }
 
+  const listableRoles = getListableUserRoles(req.user);
   const requestedRole = String(req.query.role || '').trim().toLowerCase();
-  if (requestedRole && requestedRole !== 'customer') {
+  if (requestedRole && !listableRoles.includes(requestedRole)) {
     return res.status(403).json({
       success: false,
-      message: `User role '${req.user?.role}' can only query customers`
+      message: `User role '${req.user?.role}' is not authorized to query role '${requestedRole}'`
     });
   }
 
-  req.query.role = 'customer';
+  if (!requestedRole && listableRoles.length === 1) {
+    req.query.role = listableRoles[0];
+  }
+
   return next();
 };
 
@@ -1212,26 +1211,26 @@ router.delete('/me/push-tokens', unregisterMyPushToken);
 
 router.post(
   '/',
-  authorize('admin', 'manager'),
+  authorize(...BUSINESS_MANAGER_ROLES),
   createUserRules,
   validate,
   createUser
 );
 
-router.get('/stats', authorize('admin', 'manager'), getUserStats);
+router.get('/stats', authorize(...BUSINESS_MANAGER_ROLES), getUserStats);
 router.get('/', authorizeUsersListRead, getAllUsers);
 
 router.get('/:id', validateId, validate, getUserById);
 
 router.put(
   '/:id',
-  authorize('admin', 'manager'),
+  authorize(...BUSINESS_MANAGER_ROLES),
   validateId,
   updateUserRules,
   validate,
   updateUser
 );
 
-router.delete('/:id', authorize('admin', 'manager'), validateId, validate, deleteUser);
+router.delete('/:id', authorize(...BUSINESS_MANAGER_ROLES), validateId, validate, deleteUser);
 
 module.exports = router;

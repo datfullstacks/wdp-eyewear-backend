@@ -54,8 +54,10 @@ const router = express.Router();
  *           type: string
  *     StockReceiptInput:
  *       type: object
- *       required: [supplier, items]
+ *       required: [storeId, supplier, items]
  *       properties:
+ *         storeId:
+ *           type: string
  *         supplier:
  *           type: string
  *         warehouseLocation:
@@ -76,6 +78,8 @@ const router = express.Router();
  *         _id:
  *           type: string
  *         receiptCode:
+ *           type: string
+ *         storeId:
  *           type: string
  *         supplier:
  *           type: string
@@ -124,6 +128,10 @@ const router = express.Router();
  *           maximum: 100
  *           default: 10
  *       - in: query
+ *         name: storeId
+ *         schema:
+ *           type: string
+ *       - in: query
  *         name: supplier
  *         schema:
  *           type: string
@@ -171,7 +179,7 @@ const router = express.Router();
  *       403:
  *         description: Forbidden
  *   post:
- *     summary: Create a stock receipt and increment inventory
+ *     summary: Create a store-scoped stock receipt and increment inventory
  *     tags: [Inventory]
  *     security:
  *       - bearerAuth: []
@@ -227,6 +235,8 @@ const router = express.Router();
  *                   $ref: '#/components/schemas/StockReceipt'
  *       404:
  *         description: Stock receipt not found
+ *       403:
+ *         description: Store-scoped user cannot access this receipt
  */
 
 router.use(protect);

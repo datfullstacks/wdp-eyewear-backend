@@ -3,12 +3,25 @@ const ApiResponse = require('../helpers/response');
 const supportService = require('../services/supportService');
 
 exports.listTickets = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, status, userId } = req.query;
+  const {
+    page = 1,
+    limit = 10,
+    status,
+    userId,
+    category,
+    eligibility,
+    q,
+    orderId,
+  } = req.query;
   const result = await supportService.listTickets(req.user, {
     page,
     limit,
     status,
-    userId
+    userId,
+    category,
+    eligibility,
+    q,
+    orderId,
   });
 
   ApiResponse.paginate(
@@ -37,6 +50,26 @@ exports.listRefundCases = asyncHandler(async (req, res) => {
   );
 });
 
+exports.listWarrantyCases = asyncHandler(async (req, res) => {
+  const { page = 1, limit = 20, status, userId, eligibility, q, orderId } = req.query;
+  const result = await supportService.listWarrantyCases(req.user, {
+    page,
+    limit,
+    status,
+    userId,
+    eligibility,
+    q,
+    orderId,
+  });
+
+  ApiResponse.paginate(
+    res,
+    result.cases,
+    result.pagination,
+    'Support warranty cases retrieved successfully'
+  );
+});
+
 exports.getTicket = asyncHandler(async (req, res) => {
   const ticket = await supportService.getTicketById(req.params.id, req.user);
   ApiResponse.success(res, ticket, 'Support ticket retrieved successfully');
@@ -53,6 +86,6 @@ exports.replyTicket = asyncHandler(async (req, res) => {
 });
 
 exports.updateTicketStatus = asyncHandler(async (req, res) => {
-  const ticket = await supportService.updateStatus(req.params.id, req.user, req.body.status);
+  const ticket = await supportService.updateStatus(req.params.id, req.user, req.body);
   ApiResponse.success(res, ticket, 'Support ticket status updated successfully');
 });

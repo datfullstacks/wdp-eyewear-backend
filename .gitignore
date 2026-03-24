@@ -19,6 +19,8 @@ logs/
 npm-debug.log*
 yarn-debug.log*
 product.md
+tests/
+scripts/
 seeds/
 yarn-error.log*
 lerna-debug.log*

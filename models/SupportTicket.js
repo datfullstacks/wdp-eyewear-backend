@@ -1,5 +1,28 @@
 const mongoose = require('mongoose');
 
+const SUPPORT_TICKET_CATEGORIES = [
+  'general',
+  'order',
+  'prescription',
+  'shipping',
+  'refund',
+  'return',
+  'warranty',
+];
+const GENERAL_SUPPORT_STATUSES = ['open', 'in_progress', 'resolved', 'closed'];
+const WARRANTY_SUPPORT_STATUSES = [
+  'requested',
+  'under_review',
+  'approved',
+  'rejected',
+  'in_service',
+  'completed',
+];
+const SUPPORT_TICKET_STATUSES = [
+  ...GENERAL_SUPPORT_STATUSES,
+  ...WARRANTY_SUPPORT_STATUSES,
+];
+
 const SupportMessageSchema = new mongoose.Schema(
   {
     sender: {
@@ -14,6 +37,73 @@ const SupportMessageSchema = new mongoose.Schema(
     }
   },
   { _id: true, timestamps: true }
+);
+
+const WarrantyMetadataSchema = new mongoose.Schema(
+  {
+    orderItemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product',
+      default: null,
+    },
+    variantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+    },
+    itemName: {
+      type: String,
+      default: '',
+    },
+    warrantyMonths: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    referenceDate: {
+      type: Date,
+      default: null,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    eligibility: {
+      type: String,
+      enum: ['eligible', 'expired', 'not_covered'],
+      default: 'not_covered',
+    },
+    decisionNote: {
+      type: String,
+      default: '',
+    },
+    serviceNote: {
+      type: String,
+      default: '',
+    },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    approvedAt: {
+      type: Date,
+      default: null,
+    },
+    completedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false, timestamps: false }
 );
 
 const SupportTicketSchema = new mongoose.Schema(
@@ -34,11 +124,12 @@ const SupportTicketSchema = new mongoose.Schema(
     },
     category: {
       type: String,
+      enum: SUPPORT_TICKET_CATEGORIES,
       default: 'general'
     },
     status: {
       type: String,
-      enum: ['open', 'in_progress', 'resolved', 'closed'],
+      enum: SUPPORT_TICKET_STATUSES,
       default: 'open'
     },
     priority: {
@@ -50,6 +141,15 @@ const SupportTicketSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Order',
       default: null
+    },
+    storeId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Store',
+      default: null
+    },
+    warranty: {
+      type: WarrantyMetadataSchema,
+      default: null,
     },
     messages: {
       type: [SupportMessageSchema],
@@ -65,5 +165,13 @@ const SupportTicketSchema = new mongoose.Schema(
 
 SupportTicketSchema.index({ userId: 1, createdAt: -1 });
 SupportTicketSchema.index({ status: 1, createdAt: -1 });
+SupportTicketSchema.index({ category: 1, status: 1, createdAt: -1 });
+SupportTicketSchema.index({ storeId: 1, createdAt: -1 });
 
-module.exports = mongoose.model('SupportTicket', SupportTicketSchema);
+module.exports = {
+  SupportTicket: mongoose.model('SupportTicket', SupportTicketSchema),
+  SUPPORT_TICKET_CATEGORIES,
+  GENERAL_SUPPORT_STATUSES,
+  WARRANTY_SUPPORT_STATUSES,
+  SUPPORT_TICKET_STATUSES,
+};

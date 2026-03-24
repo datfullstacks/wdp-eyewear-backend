@@ -3,6 +3,7 @@ const { body, query } = require('express-validator');
 exports.listReceiptRules = [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
+  query('storeId').optional().isMongoId().withMessage('storeId must be a valid Mongo ID'),
   query('supplier').optional().isString(),
   query('receiptCode').optional().isString(),
   query('fromDate').optional().isISO8601(),
@@ -10,6 +11,7 @@ exports.listReceiptRules = [
 ];
 
 exports.createReceiptRules = [
+  body('storeId').notEmpty().withMessage('storeId is required').isMongoId().withMessage('storeId must be a valid Mongo ID'),
   body('supplier').notEmpty().withMessage('supplier is required'),
   body('warehouseLocation').optional().isString(),
   body('receivedAt').optional().isISO8601(),

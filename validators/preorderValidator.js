@@ -5,12 +5,14 @@ exports.listPreorderBatchRules = [
   query('page').optional().isInt({ min: 1 }),
   query('limit').optional().isInt({ min: 1, max: 100 }),
   query('status').optional().isIn(PREORDER_BATCH_STATUSES),
+  query('storeId').optional().isMongoId().withMessage('storeId must be a valid Mongo ID'),
   query('supplier').optional().isString(),
   query('search').optional().isString()
 ];
 
 exports.createPreorderBatchRules = [
   body('batchCode').notEmpty().withMessage('batchCode is required').isString(),
+  body('storeId').notEmpty().withMessage('storeId is required').isMongoId().withMessage('storeId must be a valid Mongo ID'),
   body('supplier').notEmpty().withMessage('supplier is required').isString(),
   body('orderDate').notEmpty().withMessage('orderDate is required').isISO8601(),
   body('expectedDate').optional().isISO8601(),

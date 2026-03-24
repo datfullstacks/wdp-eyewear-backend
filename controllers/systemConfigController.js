@@ -1,51 +1,7 @@
 const asyncHandler = require("../helpers/asyncHandler");
 const ApiResponse = require("../helpers/response");
 const { SystemConfig } = require("../models/SystemConfig");
-
-function defaultSystemConfig() {
-  return {
-    key: "default",
-    featureFlags: {
-      preorderEnabled: true,
-      splitPaymentEnabled: true,
-      refundWorkflowEnabled: true,
-      managerPolicyEditorEnabled: true,
-    },
-    payments: {
-      payNowGateway: "sepay",
-      codEnabled: true,
-      supportedPayNowMethods: ["sepay"],
-    },
-    shipping: {
-      defaultCarrier: "ghn",
-      ghnEnabled: true,
-      allowEstimatedShippingFee: true,
-    },
-    notifications: {
-      emailEnabled: true,
-      pushEnabled: true,
-      smsEnabled: false,
-    },
-    refunds: {
-      staffApprovalLimit: 300000,
-      requiresManagerForReturn: true,
-      requiresManagerForShippingRefund: true,
-      requirePayoutProof: false,
-    },
-    integrations: {
-      sepay: { enabled: true },
-      ghn: { enabled: true },
-    },
-    maintenanceMode: false,
-  };
-}
-
-async function getOrCreateSystemConfig() {
-  const existing = await SystemConfig.findOne({ key: "default" });
-  if (existing) return existing;
-
-  return SystemConfig.create(defaultSystemConfig());
-}
+const { getOrCreateSystemConfig } = require("../helpers/systemConfig");
 
 function toPayload(config) {
   return {

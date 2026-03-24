@@ -1,7 +1,9 @@
 const Product = require('../models/Product');
+const Store = require('../models/Store');
 const AppError = require('../errors/AppError');
 const { PREORDER_BATCH_STATUSES, PreorderBatch } = require('../models/PreorderBatch');
 const { publishStatusChange } = require('../helpers/statusEvents');
+const { buildStoreScopedQuery, canAccessStore } = require('../helpers/storeAccess');
 
 const PREORDER_STATUS_SET = new Set(PREORDER_BATCH_STATUSES);
 
@@ -21,6 +23,45 @@ function buildVariantLabel(variant = {}) {
 }
 
 class PreorderService {
+  async resolveStoreId(storeId, currentUser) {
+    const normalizedStoreId = String(storeId || '').trim();
+    if (!normalizedStoreId) {
+      throw new AppError('storeId is required', 400);
+    }
+
+    if (!canAccessStore(currentUser, normalizedStoreId)) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    const exists = await Store.exists({ _id: normalizedStoreId });
+    if (!exists) {
+      throw new AppError('Store not found', 404);
+    }
+
+    return normalizedStoreId;
+  }
+
+  buildScopedQuery(currentUser) {
+    if (!currentUser?.id) {
+      throw new AppError('Unauthorized', 401);
+    }
+
+    return { ...buildStoreScopedQuery(currentUser, 'storeId') };
+  }
+
+  async getScopedBatch(batchId, currentUser) {
+    const batch = await PreorderBatch.findOne({
+      _id: batchId,
+      ...this.buildScopedQuery(currentUser),
+    });
+
+    if (!batch) {
+      throw new AppError('Preorder batch not found', 404);
+    }
+
+    return batch;
+  }
+
   async resolveBatchItems(itemsInput = []) {
     if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
       throw new AppError('items is required', 400);
@@ -69,6 +110,7 @@ class PreorderService {
 
     if (!batchCode) throw new AppError('batchCode is required', 400);
     if (!supplier) throw new AppError('supplier is required', 400);
+    const storeId = await this.resolveStoreId(payload.storeId || payload.store_id, currentUser);
 
     const orderDate = payload.orderDate ? new Date(payload.orderDate) : new Date();
     if (Number.isNaN(orderDate.getTime())) throw new AppError('orderDate is invalid', 400);
@@ -89,6 +131,7 @@ class PreorderService {
 
     const batch = await PreorderBatch.create({
       batchCode,
+      storeId,
       supplier,
       orderDate,
       expectedDate: expectedDate || undefined,
@@ -100,17 +143,22 @@ class PreorderService {
       createdBy: currentUser.id
     });
 
-    return PreorderBatch.findById(batch._id).populate({
-      path: 'createdBy',
-      select: 'name email role'
-    });
+    return PreorderBatch.findById(batch._id).populate([
+      { path: 'createdBy', select: 'name email role' },
+      { path: 'storeId', select: 'name code type status city district' },
+    ]);
   }
 
-  async listBatches(options = {}) {
+  async listBatches(options = {}, currentUser) {
     const page = Math.max(1, Number(options.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));
     const skip = (page - 1) * limit;
-    const query = {};
+    const query = this.buildScopedQuery(currentUser);
+
+    if (options.storeId) {
+      const scopedStoreId = await this.resolveStoreId(options.storeId, currentUser);
+      query.storeId = scopedStoreId;
+    }
 
     if (options.status) {
       const normalized = String(options.status).trim().toLowerCase();
@@ -134,6 +182,7 @@ class PreorderService {
     const [batches, total] = await Promise.all([
       PreorderBatch.find(query)
         .populate({ path: 'createdBy', select: 'name email role' })
+        .populate({ path: 'storeId', select: 'name code type status city district' })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -151,9 +200,13 @@ class PreorderService {
     };
   }
 
-  async getBatchById(id) {
-    const batch = await PreorderBatch.findById(id)
+  async getBatchById(id, currentUser) {
+    const batch = await PreorderBatch.findOne({
+      _id: id,
+      ...this.buildScopedQuery(currentUser),
+    })
       .populate({ path: 'createdBy', select: 'name email role' })
+      .populate({ path: 'storeId', select: 'name code type status city district' })
       .populate({ path: 'receipts.receivedBy', select: 'name email role' })
       .populate({ path: 'items.productId', select: 'name type brand status variants' });
 
@@ -164,8 +217,7 @@ class PreorderService {
   async receiveBatch(batchId, payload = {}, currentUser) {
     if (!currentUser?.id) throw new AppError('Unauthorized', 401);
 
-    const batch = await PreorderBatch.findById(batchId);
-    if (!batch) throw new AppError('Preorder batch not found', 404);
+    const batch = await this.getScopedBatch(batchId, currentUser);
     const previousStatus = batch.status;
 
     if (batch.status === 'completed' && batch.items.every((item) => Number(item.pendingQty || 0) === 0)) {
@@ -247,7 +299,7 @@ class PreorderService {
         supplier: batch.supplier,
       },
     });
-    return this.getBatchById(batch._id);
+    return this.getBatchById(batch._id, currentUser);
   }
 
   async updateBatchStatus(batchId, status, currentUser = null) {
@@ -256,8 +308,7 @@ class PreorderService {
       throw new AppError('Invalid status', 400);
     }
 
-    const batch = await PreorderBatch.findById(batchId);
-    if (!batch) throw new AppError('Preorder batch not found', 404);
+    const batch = await this.getScopedBatch(batchId, currentUser);
     const previousStatus = batch.status;
 
     if (normalized === 'completed' && batch.items.some((item) => Number(item.pendingQty || 0) > 0)) {
@@ -281,7 +332,7 @@ class PreorderService {
         supplier: batch.supplier,
       },
     });
-    return this.getBatchById(batch._id);
+    return this.getBatchById(batch._id, currentUser);
   }
 }
 
