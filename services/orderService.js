@@ -29,6 +29,11 @@ const {
 const { publishStatusChange } = require("../helpers/statusEvents");
 const { appendUserNotification } = require("../helpers/userNotification");
 const {
+  findRefundBank,
+  normalizeRefundAccountNumber,
+  isRefundAccountNumberFormatValid,
+} = require("../helpers/refundBankCatalog");
+const {
   canTransitionOpsStage,
   getInitialOpsStage,
   isOpsStageAllowedForOrderType,
@@ -2079,15 +2084,52 @@ function getOrderEditWindowEndsAt(order) {
   return null;
 }
 
-function normalizeRefundBankAccount(bankAccount) {
-  if (!bankAccount || typeof bankAccount !== "object") return null;
-  const accountNumber = toTrimmedString(bankAccount.accountNumber);
-  const bankName = toTrimmedString(bankAccount.bankName);
+function normalizeRefundBankAccount(bankAccount, options = {}) {
+  const { required = false, fieldName = "bankAccount" } = options;
+  if (!bankAccount || typeof bankAccount !== "object") {
+    if (required) {
+      throw new AppError(`${fieldName} is required`, 400);
+    }
+    return null;
+  }
+
+  const rawBankCode = toTrimmedString(bankAccount.bankCode).toUpperCase();
+  const rawBankName = toTrimmedString(bankAccount.bankName);
+  const accountNumber = normalizeRefundAccountNumber(bankAccount.accountNumber);
   const accountHolder = toTrimmedString(bankAccount.accountHolder);
-  if (!accountNumber || !bankName || !accountHolder) return null;
+  const bank = findRefundBank({
+    bankCode: rawBankCode,
+    bankName: rawBankName,
+  });
+
+  if (required && !rawBankCode) {
+    throw new AppError(`${fieldName}.bankCode is required`, 400);
+  }
+  if (!bank) {
+    if (required) {
+      throw new AppError(`${fieldName}.bankCode is invalid or unsupported`, 400);
+    }
+    return null;
+  }
+  if (!accountNumber) {
+    if (required) {
+      throw new AppError(`${fieldName}.accountNumber is required`, 400);
+    }
+    return null;
+  }
+  if (!isRefundAccountNumberFormatValid(accountNumber)) {
+    throw new AppError(`${fieldName}.accountNumber must contain 8 to 19 digits`, 400);
+  }
+  if (!accountHolder) {
+    if (required) {
+      throw new AppError(`${fieldName}.accountHolder is required`, 400);
+    }
+    return null;
+  }
 
   return {
-    bankName,
+    bankCode: bank.code,
+    bankName: bank.name,
     accountNumber,
     accountHolder,
     note: toTrimmedString(bankAccount.note, ""),
@@ -3195,17 +3237,20 @@ async function createRefundRequest(id, currentUser, payload = {}) {
     );
   }
 
-  const ownerUser = await User.findById(order.userId).select("refundAccount");
-  const fallbackBankAccount =
-    normalizeRefundBankAccount(ownerUser?.refundAccount) ||
-    normalizeRefundBankAccount(order.refund?.bankAccount);
+  const requestedBankAccount = normalizeRefundBankAccount(
+    payload.bankAccount || payload.bank_account,
+    {
+      required: true,
+      fieldName: "bankAccount",
+    },
+  );
   const baseBreakdown = splitPaidAmountIntoRefundBreakdown(order, paidAmount, true);
 
   const previousRefundStatus = order.refund?.status || "none";
 
   order.refund = buildRefundRequestState(order, currentUser, payload, {
     defaultAmount: baseBreakdown.itemAmount,
-    bankAccount: fallbackBankAccount || undefined,
+    bankAccount: requestedBankAccount,
     note: payload.note,
     requiresReturn: false,
   });
@@ -3551,6 +3596,10 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
       );
       const bankAccount = normalizeRefundBankAccount(
         payload.bankAccount || payload.bank_account,
+        {
+          required: true,
+          fieldName: "bankAccount",
+        },
       );
       const evidence = normalizeUrlList(payload.evidence, "evidence");
       const customerNote = toTrimmedString(

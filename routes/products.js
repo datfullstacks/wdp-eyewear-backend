@@ -54,7 +54,7 @@ const {
  *           type: string
  *         format:
  *           type: string
- *           enum: [glb, gltf, usdz]
+ *           enum: [glb, gltf]
  *         posterUrl:
  *           type: string
  *         order:
