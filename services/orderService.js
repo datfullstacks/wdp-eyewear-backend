@@ -101,7 +101,6 @@ const CART_TYPES = {
 };
 const SHIPPING_COLLECTION_TIMINGS = new Set([
   "upfront",
-  "with_balance",
   "on_delivery",
 ]);
 const SHIPPING_FEE_MODES = new Set(["exact", "estimated"]);
@@ -347,6 +346,7 @@ function normalizeOptionalEnum(value, allowedSet, fieldName) {
 
 function normalizeShippingCollectionTiming(value, fallback = "upfront") {
   const normalized = toTrimmedString(value, "").toLowerCase();
+  if (normalized === "with_balance") return "on_delivery";
   return SHIPPING_COLLECTION_TIMINGS.has(normalized) ? normalized : fallback;
 }
 

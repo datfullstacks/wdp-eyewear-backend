@@ -5,6 +5,14 @@ const {
   ORDER_STATUS,
   ORDER_TYPES,
 } = require("../constants");
+const SHIPPING_COLLECTION_TIMING_VALUES = ["upfront", "on_delivery"];
+
+function normalizeShippingCollectionTiming(value) {
+  if (value === undefined || value === null || value === "") return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "with_balance") return "on_delivery";
+  return SHIPPING_COLLECTION_TIMING_VALUES.includes(normalized) ? normalized : value;
+}
 
 const PrescriptionEyeSchema = new mongoose.Schema(
   {
@@ -332,8 +340,9 @@ const OrderSchema = new mongoose.Schema(
     },
     shippingCollectionTiming: {
       type: String,
-      enum: ["upfront", "with_balance", "on_delivery"],
+      enum: SHIPPING_COLLECTION_TIMING_VALUES,
       default: "upfront",
+      set: normalizeShippingCollectionTiming,
     },
     shippingFeeMode: {
       type: String,
@@ -440,5 +449,12 @@ const OrderSchema = new mongoose.Schema(
 OrderSchema.index({ paymentCode: 1 }, { unique: true, sparse: true });
 OrderSchema.index({ invoiceId: 1 }, { unique: true, sparse: true });
 OrderSchema.index({ "shipment.orderCode": 1 }, { sparse: true });
+
+OrderSchema.pre("validate", function mapLegacyShippingCollectionTiming(next) {
+  if (this.shippingCollectionTiming === "with_balance") {
+    this.shippingCollectionTiming = "on_delivery";
+  }
+  next();
+});
 
 module.exports = mongoose.model("Order", OrderSchema);
