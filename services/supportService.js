@@ -1,337 +1,691 @@
-const SupportTicket = require('../models/SupportTicket');
-const Order = require('../models/Order');
-const AppError = require('../errors/AppError');
-const { isBusinessUser } = require('../helpers/roles');
-const { buildStoreScopedQuery } = require('../helpers/storeAccess');
-const { publishStatusChange } = require('../helpers/statusEvents');
+const mongoose = require("mongoose");
 
-function formatCurrencyNumber(value) {
-  return Math.round(Number(value || 0));
+const AppError = require("../errors/AppError");
+const Order = require("../models/Order");
+const Product = require("../models/Product");
+const Store = require("../models/Store");
+const {
+  SupportTicket,
+  SUPPORT_TICKET_CATEGORIES,
+  GENERAL_SUPPORT_STATUSES,
+  WARRANTY_SUPPORT_STATUSES,
+  SUPPORT_TICKET_STATUSES,
+} = require("../models/SupportTicket");
+const {
+  isBusinessUser,
+  isCustomer,
+  isStaff,
+  isOperation,
+  isManager,
+  getUserId,
+} = require("../helpers/roles");
+const {
+  canAccessStore,
+  buildStoreScopedQuery,
+  getAccessibleStoreIds,
+  normalizeStoreId,
+} = require("../helpers/storeAccess");
+
+const SUPPORT_CATEGORY_SET = new Set(SUPPORT_TICKET_CATEGORIES);
+const SUPPORT_STATUS_SET = new Set(SUPPORT_TICKET_STATUSES);
+const GENERAL_STATUS_SET = new Set(GENERAL_SUPPORT_STATUSES);
+const WARRANTY_STATUS_SET = new Set(WARRANTY_SUPPORT_STATUSES);
+const WARRANTY_ELIGIBILITY_SET = new Set([
+  "eligible",
+  "expired",
+  "not_covered",
+]);
+const SUPPORT_PRIORITY_SET = new Set(["low", "normal", "high"]);
+const WARRANTY_TRANSITIONS = Object.freeze({
+  requested: ["under_review", "rejected"],
+  under_review: ["approved", "rejected"],
+  approved: ["in_service", "completed"],
+  in_service: ["completed"],
+  rejected: [],
+  completed: [],
+});
+const REFUND_STATUS_SET = new Set([
+  "requested",
+  "reviewing",
+  "waiting_customer_info",
+  "escalated_to_manager",
+  "approved",
+  "return_pending",
+  "return_received",
+  "processing",
+  "completed",
+  "rejected",
+]);
+
+const TICKET_POPULATE = [
+  { path: "userId", select: "name email role" },
+  {
+    path: "orderId",
+    select: "paymentCode status orderType total storeId userId createdAt",
+  },
+  { path: "storeId", select: "name code type status city district" },
+  { path: "warranty.productId", select: "name slug fulfillment.warrantyMonths" },
+];
+
+function toTrimmedString(value, fallback = "") {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+
+  const normalized = String(value).trim();
+  return normalized || fallback;
 }
 
-function buildRefundBreakdown(value) {
+function normalizeCategory(value) {
+  const normalized = toTrimmedString(value, "general").toLowerCase();
+  return SUPPORT_CATEGORY_SET.has(normalized) ? normalized : "general";
+}
+
+function normalizeStatus(value) {
+  const normalized = toTrimmedString(value, "").toLowerCase();
+  return SUPPORT_STATUS_SET.has(normalized) ? normalized : "";
+}
+
+function isWarrantyCategory(category) {
+  return normalizeCategory(category) === "warranty";
+}
+
+function parsePagination(options = {}) {
+  const page = Math.max(1, Number(options.page) || 1);
+  const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));
   return {
-    itemAmount: formatCurrencyNumber(value?.itemAmount || 0),
-    shippingFeeAmount: formatCurrencyNumber(value?.shippingFeeAmount || 0),
-    returnShippingFeeAmount: formatCurrencyNumber(value?.returnShippingFeeAmount || 0),
-    total: formatCurrencyNumber(value?.total || 0),
+    page,
+    limit,
+    skip: (page - 1) * limit,
   };
 }
 
-function resolveRefundMethod(order, bankInfo) {
-  if (bankInfo?.accountNumber || bankInfo?.bankName) {
-    return 'bank_transfer';
+function addMonths(date, months) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return null;
   }
 
-  switch (String(order?.paymentMethod || '').trim().toLowerCase()) {
-    case 'credit_card':
-      return 'card';
-    case 'cash':
-    case 'cod':
-      return 'cash';
-    case 'e_wallet':
-      return 'wallet';
-    default:
-      return 'bank_transfer';
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + Number(months || 0));
+  return next;
+}
+
+function resolveWarrantyReferenceDate(order) {
+  const deliveredState = toTrimmedString(order?.shipment?.state, "").toLowerCase();
+  const shipmentDate =
+    deliveredState === "delivered"
+      ? order?.shipment?.lastActionAt ||
+        order?.shipment?.updatedAt ||
+        order?.shipment?.createdAt
+      : null;
+  const candidate = shipmentDate || order?.confirmedAt || order?.createdAt;
+  const normalized = candidate ? new Date(candidate) : null;
+  if (!normalized || Number.isNaN(normalized.getTime())) {
+    return null;
   }
+  return normalized;
 }
 
-function buildRefundReference(value) {
-  const normalized = String(value || '')
-    .trim()
-    .replace(/[^A-Za-z0-9]/g, '')
-    .toUpperCase();
-  return `RF-${(normalized || 'UNKNOWN').slice(-8)}`;
-}
-
-function mapRefundCase(order) {
-  const requestedBreakdown = buildRefundBreakdown(order?.refund?.requestedBreakdown);
-  const approvedBreakdown = buildRefundBreakdown(order?.refund?.approvedBreakdown);
-  const bankInfo = order?.refund?.bankAccount || null;
-  const amount =
-    approvedBreakdown.total ||
-    requestedBreakdown.total ||
-    formatCurrencyNumber(order?.refund?.amount || 0) ||
-    formatCurrencyNumber(order?.paidAmount || 0) ||
-    formatCurrencyNumber(order?.total || 0);
+function buildWarrantySnapshot(order, orderItem, product) {
+  const warrantyMonths = Math.max(
+    0,
+    Number(product?.fulfillment?.warrantyMonths || 0),
+  );
+  const referenceDate = resolveWarrantyReferenceDate(order);
+  const expiresAt =
+    warrantyMonths > 0 && referenceDate ? addMonths(referenceDate, warrantyMonths) : null;
+  const now = new Date();
+  const eligibility =
+    warrantyMonths <= 0
+      ? "not_covered"
+      : expiresAt && expiresAt >= now
+        ? "eligible"
+        : "expired";
 
   return {
-    orderInternalId: String(order?._id || ''),
-    id: buildRefundReference(order?.paymentCode || order?._id),
-    orderId: String(order?.paymentCode || order?._id || ''),
-    customerName: String(order?.shippingAddress?.fullName || '').trim() || 'Customer',
-    customerPhone: String(order?.shippingAddress?.phone || '').trim(),
-    amount,
-    reason: String(order?.refund?.reason || '').trim() || 'Khach yeu cau hoan tien',
-    method: resolveRefundMethod(order, bankInfo),
-    paymentMethod: String(order?.paymentMethod || '').trim().toLowerCase(),
-    status: String(order?.refund?.status || 'none').trim().toLowerCase(),
-    createdAt: order?.refund?.requestedAt || order?.createdAt || null,
-    processedAt: order?.refund?.processedAt || null,
-    bankInfo: bankInfo
-      ? {
-          bankName: String(bankInfo.bankName || '').trim(),
-          accountNumber: String(bankInfo.accountNumber || '').trim(),
-          accountHolder: String(bankInfo.accountHolder || '').trim(),
-          note: String(bankInfo.note || '').trim(),
-        }
-      : undefined,
-    notes:
-      String(order?.refund?.decisionNote || '').trim() ||
-      String(order?.refund?.contactNote || '').trim() ||
-      String(order?.refund?.rejectReason || '').trim() ||
-      String(order?.note || '').trim(),
-    responsibility: String(order?.refund?.responsibility || '').trim().toLowerCase() || undefined,
-    requiresReturn: Boolean(order?.refund?.requiresReturn),
-    requestedBreakdown,
-    approvedBreakdown,
-    rejectReason: String(order?.refund?.rejectReason || '').trim(),
-    decisionNote: String(order?.refund?.decisionNote || '').trim(),
-    escalateReason: String(order?.refund?.escalateReason || '').trim(),
-    currentOwnerRole: String(order?.refund?.currentOwnerRole || 'none').trim().toLowerCase(),
-    currentOwnerUserId: order?.refund?.currentOwnerUserId
-      ? String(order.refund.currentOwnerUserId)
-      : undefined,
-    nextActionCode: String(order?.refund?.nextActionCode || '').trim().toLowerCase(),
-    inspectionStatus: String(order?.refund?.inspectionStatus || 'not_required')
-      .trim()
-      .toLowerCase(),
-    inspectionNote: String(order?.refund?.inspectionNote || '').trim(),
-    inspectionAt: order?.refund?.inspectionAt || null,
-    returnShipmentCode: String(order?.refund?.returnShipmentCode || '').trim(),
-    returnCarrier: String(order?.refund?.returnCarrier || '').trim().toLowerCase(),
-    returnReceivedAt: order?.refund?.returnReceivedAt || null,
-    transactionRef: String(order?.refund?.transactionRef || '').trim(),
-    payoutProofUrl: String(order?.refund?.payoutProofUrl || '').trim(),
-    evidence: Array.isArray(order?.refund?.evidence)
-      ? order.refund.evidence
-          .map((value) => String(value || '').trim())
-          .filter(Boolean)
-      : [],
-    history: Array.isArray(order?.refund?.history) ? order.refund.history : [],
+    orderItemId: orderItem?._id || null,
+    productId: orderItem?.productId || product?._id || null,
+    variantId: orderItem?.variantId || null,
+    itemName: toTrimmedString(orderItem?.name || product?.name, ""),
+    warrantyMonths,
+    referenceDate,
+    expiresAt,
+    eligibility,
+    decisionNote: "",
+    serviceNote: "",
+    approvedBy: null,
+    approvedAt: null,
+    completedBy: null,
+    completedAt: null,
   };
+}
+
+function buildPagination(page, limit, total) {
+  return {
+    page,
+    limit,
+    total,
+    totalPages: total === 0 ? 0 : Math.ceil(total / limit),
+  };
+}
+
+function assertSupportAccess(currentUser) {
+  if (!currentUser || (!isCustomer(currentUser) && !isBusinessUser(currentUser))) {
+    throw new AppError("Forbidden", 403);
+  }
+}
+
+function assertBusinessTicketAccess(ticket, currentUser) {
+  if (!isBusinessUser(currentUser)) {
+    throw new AppError("Forbidden", 403);
+  }
+
+  const ticketStoreId = normalizeStoreId(ticket?.storeId);
+  if (!ticketStoreId) {
+    if (!isManager(currentUser)) {
+      throw new AppError("Forbidden", 403);
+    }
+    return;
+  }
+
+  if (!canAccessStore(currentUser, ticketStoreId)) {
+    throw new AppError("Forbidden", 403);
+  }
+}
+
+function buildBusinessTicketVisibilityQuery(currentUser) {
+  if (!isBusinessUser(currentUser)) {
+    throw new AppError("Forbidden", 403);
+  }
+
+  const accessibleStoreIds = getAccessibleStoreIds(currentUser);
+  if (isManager(currentUser)) {
+    if (accessibleStoreIds === null) {
+      return {};
+    }
+
+    return {
+      $or: [
+        { storeId: { $in: accessibleStoreIds } },
+        { storeId: null },
+      ],
+    };
+  }
+
+  if (accessibleStoreIds === null) {
+    return {
+      storeId: { $ne: null },
+    };
+  }
+
+  return {
+    storeId: { $in: accessibleStoreIds },
+  };
+}
+
+async function findAccessibleOrder(orderId, currentUser) {
+  if (!orderId || !mongoose.isValidObjectId(orderId)) {
+    throw new AppError("orderId is invalid", 400);
+  }
+
+  const order = await Order.findById(orderId).select(
+    "_id userId storeId status orderType createdAt confirmedAt shipment items paymentCode",
+  );
+  if (!order) {
+    throw new AppError("Order not found", 404);
+  }
+
+  const actorUserId = getUserId(currentUser);
+  if (isCustomer(currentUser) && String(order.userId) !== String(actorUserId)) {
+    throw new AppError("Forbidden", 403);
+  }
+
+  if (isBusinessUser(currentUser)) {
+    const orderStoreId = normalizeStoreId(order.storeId);
+    if (orderStoreId && !canAccessStore(currentUser, orderStoreId)) {
+      throw new AppError("Forbidden", 403);
+    }
+  }
+
+  return order;
+}
+
+async function resolveRequestedStoreId(storeId, currentUser) {
+  const normalizedStoreId = normalizeStoreId(storeId);
+  if (!normalizedStoreId) {
+    return "";
+  }
+
+  const exists = await Store.exists({ _id: normalizedStoreId });
+  if (!exists) {
+    throw new AppError("Store not found", 404);
+  }
+
+  if (isBusinessUser(currentUser) && !canAccessStore(currentUser, normalizedStoreId)) {
+    throw new AppError("Forbidden", 403);
+  }
+
+  return normalizedStoreId;
+}
+
+function populateTicketQuery(query) {
+  return query.populate(TICKET_POPULATE);
+}
+
+async function findSearchableOrderIds(currentUser, search) {
+  const normalizedSearch = toTrimmedString(search, "");
+  if (!normalizedSearch) {
+    return [];
+  }
+
+  const orderQuery = {
+    $or: [
+      { paymentCode: { $regex: normalizedSearch, $options: "i" } },
+      { "shippingAddress.fullName": { $regex: normalizedSearch, $options: "i" } },
+      { "shippingAddress.phone": { $regex: normalizedSearch, $options: "i" } },
+    ],
+  };
+
+  if (isCustomer(currentUser)) {
+    orderQuery.userId = getUserId(currentUser);
+  } else {
+    Object.assign(orderQuery, buildStoreScopedQuery(currentUser, "storeId"));
+  }
+
+  const orders = await Order.find(orderQuery).select("_id").limit(50);
+  return orders.map((order) => order?._id).filter(Boolean);
+}
+
+function validateWarrantyTransition(currentStatus, nextStatus, currentUser) {
+  if (!WARRANTY_STATUS_SET.has(nextStatus)) {
+    throw new AppError("Invalid warranty status", 400);
+  }
+
+  if (isManager(currentUser)) {
+    return;
+  }
+
+  if (isOperation(currentUser)) {
+    if (!["in_service", "completed"].includes(nextStatus)) {
+      throw new AppError(
+        "Operations can only move warranty cases to in_service or completed",
+        403,
+      );
+    }
+  } else if (isStaff(currentUser)) {
+    if (!["under_review", "approved", "rejected"].includes(nextStatus)) {
+      throw new AppError(
+        "Sales/support can only review or decide warranty cases",
+        403,
+      );
+    }
+  } else {
+    throw new AppError("Forbidden", 403);
+  }
+
+  const allowed = WARRANTY_TRANSITIONS[currentStatus] || [];
+  if (!allowed.includes(nextStatus)) {
+    throw new AppError(
+      `Warranty status cannot transition from ${currentStatus} to ${nextStatus}`,
+      400,
+    );
+  }
 }
 
 class SupportService {
-  normalizeCreatePayload(payload = {}) {
-    const subject = String(payload.subject || '').trim();
-    const message = String(payload.message || '').trim();
-    const category = String(payload.category || 'general').trim().toLowerCase() || 'general';
-    const priority = String(payload.priority || 'normal').trim().toLowerCase() || 'normal';
-    const email = String(payload.email || '').trim();
-    const orderId = payload.orderId || null;
-
-    if (!subject) throw new AppError('subject is required', 400);
-    if (!message) throw new AppError('message is required', 400);
-
-    return { subject, message, category, priority, email, orderId };
-  }
-
-  async createTicket(currentUser, payload = {}) {
-    if (!currentUser) throw new AppError('Unauthorized', 401);
-    const data = this.normalizeCreatePayload(payload);
-
-    const ticket = await SupportTicket.create({
-      userId: currentUser.id,
-      email: data.email || currentUser.email || '',
-      subject: data.subject,
-      category: data.category,
-      priority: data.priority,
-      orderId: data.orderId,
-      messages: [
-        {
-          sender: 'user',
-          message: data.message
-        }
-      ],
-      lastMessageAt: new Date()
-    });
-
-    return ticket;
-  }
-
   async listTickets(currentUser, options = {}) {
-    if (!currentUser) throw new AppError('Unauthorized', 401);
+    assertSupportAccess(currentUser);
 
-    const page = Math.max(1, Number(options.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = parsePagination(options);
     const query = {};
+    const normalizedCategory = options.category
+      ? normalizeCategory(options.category)
+      : "";
+    const normalizedStatus = normalizeStatus(options.status);
+    const normalizedEligibility = toTrimmedString(options.eligibility, "").toLowerCase();
+    const normalizedSearch = toTrimmedString(options.q, "");
+    const normalizedOrderId = toTrimmedString(
+      options.orderId || options.order_id,
+      "",
+    );
 
-    const isStaff = isBusinessUser(currentUser);
-    if (isStaff && options.userId) {
-      query.userId = options.userId;
-    } else if (!isStaff) {
-      query.userId = currentUser.id;
+    if (normalizedCategory) {
+      query.category = normalizedCategory;
     }
 
-    if (options.status) {
-      query.status = String(options.status).trim().toLowerCase();
+    if (normalizedStatus) {
+      query.status = normalizedStatus;
+    }
+
+    if (normalizedEligibility) {
+      if (!WARRANTY_ELIGIBILITY_SET.has(normalizedEligibility)) {
+        throw new AppError("Invalid warranty eligibility filter", 400);
+      }
+      query["warranty.eligibility"] = normalizedEligibility;
+      if (!query.category) {
+        query.category = "warranty";
+      }
+    }
+
+    if (isCustomer(currentUser)) {
+      query.userId = getUserId(currentUser);
+    } else {
+      Object.assign(query, buildBusinessTicketVisibilityQuery(currentUser));
+      if (options.userId && mongoose.isValidObjectId(options.userId)) {
+        query.userId = options.userId;
+      }
+    }
+
+    if (normalizedOrderId) {
+      const order = await findAccessibleOrder(normalizedOrderId, currentUser);
+      query.orderId = order._id;
+    }
+
+    if (normalizedSearch) {
+      const matchedOrderIds = await findSearchableOrderIds(
+        currentUser,
+        normalizedSearch,
+      );
+      const searchConditions = [
+        { subject: { $regex: normalizedSearch, $options: "i" } },
+      ];
+
+      if (matchedOrderIds.length > 0) {
+        searchConditions.push({ orderId: { $in: matchedOrderIds } });
+      }
+
+      query.$or = searchConditions;
     }
 
     const [tickets, total] = await Promise.all([
-      SupportTicket.find(query).sort({ lastMessageAt: -1, createdAt: -1 }).skip(skip).limit(limit),
-      SupportTicket.countDocuments(query)
+      populateTicketQuery(
+        SupportTicket.find(query).sort({ lastMessageAt: -1, createdAt: -1 }),
+      )
+        .skip(skip)
+        .limit(limit),
+      SupportTicket.countDocuments(query),
     ]);
 
     return {
       tickets,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit)
-      }
+      pagination: buildPagination(page, limit, total),
     };
   }
 
-  async getTicketById(id, currentUser) {
-    if (!currentUser) throw new AppError('Unauthorized', 401);
-
-    const ticket = await SupportTicket.findById(id);
-    if (!ticket) throw new AppError('Support ticket not found', 404);
-
-    const isOwner = String(ticket.userId) === String(currentUser.id);
-    const isStaff = isBusinessUser(currentUser);
-    if (!isOwner && !isStaff) {
-      throw new AppError('Forbidden', 403);
+  async listWarrantyCases(currentUser, options = {}) {
+    if (!isBusinessUser(currentUser)) {
+      throw new AppError("Forbidden", 403);
     }
 
-    return ticket;
-  }
-
-  async addReply(id, currentUser, payload = {}) {
-    const ticket = await this.getTicketById(id, currentUser);
-    const message = String(payload.message || '').trim();
-    if (!message) throw new AppError('message is required', 400);
-
-    const isStaff = isBusinessUser(currentUser);
-    const previousStatus = ticket.status;
-    ticket.messages.push({
-      sender: isStaff ? 'staff' : 'user',
-      message
+    const result = await this.listTickets(currentUser, {
+      ...options,
+      category: "warranty",
     });
 
-    if (ticket.status === 'closed') {
-      ticket.status = 'in_progress';
-    } else if (isStaff && ticket.status === 'open') {
-      ticket.status = 'in_progress';
-    }
-
-    ticket.lastMessageAt = new Date();
-    await ticket.save();
-
-    publishStatusChange({
-      domain: 'support',
-      entityId: ticket._id,
-      previousStatus,
-      nextStatus: ticket.status,
-      currentUser,
-      recipientUserIds: [ticket.userId],
-      meta: {
-        category: ticket.category,
-        priority: ticket.priority,
-      },
-    });
-
-    return ticket;
-  }
-
-  async updateStatus(id, currentUser, status) {
-    const isStaff = isBusinessUser(currentUser);
-    if (!isStaff) throw new AppError('Forbidden', 403);
-
-    const normalized = String(status || '').trim().toLowerCase();
-    if (!['open', 'in_progress', 'resolved', 'closed'].includes(normalized)) {
-      throw new AppError('Invalid status', 400);
-    }
-
-    const ticket = await SupportTicket.findById(id);
-    if (!ticket) throw new AppError('Support ticket not found', 404);
-    const previousStatus = ticket.status;
-
-    ticket.status = normalized;
-    await ticket.save();
-
-    publishStatusChange({
-      domain: 'support',
-      entityId: ticket._id,
-      previousStatus,
-      nextStatus: ticket.status,
-      currentUser,
-      recipientUserIds: [ticket.userId],
-      meta: {
-        category: ticket.category,
-        priority: ticket.priority,
-      },
-    });
-
-    return ticket;
+    return {
+      cases: result.tickets,
+      pagination: result.pagination,
+    };
   }
 
   async listRefundCases(currentUser, options = {}) {
-    if (!currentUser) throw new AppError('Unauthorized', 401);
-    if (!isBusinessUser(currentUser) && currentUser.role !== 'admin') {
-      throw new AppError('Forbidden', 403);
+    if (!isBusinessUser(currentUser)) {
+      throw new AppError("Forbidden", 403);
     }
 
-    const page = Math.max(1, Number(options.page) || 1);
-    const limit = Math.min(100, Math.max(1, Number(options.limit) || 20));
-    const skip = (page - 1) * limit;
-    const status = String(options.status || '').trim().toLowerCase();
-    const ownerRole = String(options.ownerRole || options.owner_role || '')
-      .trim()
-      .toLowerCase();
-    const search = String(options.q || options.search || '').trim().toLowerCase();
-
+    const { page, limit, skip } = parsePagination(options);
     const query = {
-      'refund.status': { $nin: [null, 'none'] },
-      ...buildStoreScopedQuery(currentUser, 'storeId'),
+      "refund.status": { $ne: "none" },
+      ...buildStoreScopedQuery(currentUser, "storeId"),
     };
+    const normalizedStatus = toTrimmedString(options.status, "").toLowerCase();
+    const ownerRole = toTrimmedString(options.ownerRole, "").toLowerCase();
+    const search = toTrimmedString(options.q, "");
 
-    if (status) {
-      query['refund.status'] = status;
+    if (normalizedStatus) {
+      if (!REFUND_STATUS_SET.has(normalizedStatus)) {
+        throw new AppError("Invalid refund status filter", 400);
+      }
+      query["refund.status"] = normalizedStatus;
     }
 
     if (ownerRole) {
-      query['refund.currentOwnerRole'] = ownerRole;
+      query["refund.currentOwnerRole"] = ownerRole;
     }
 
     if (search) {
       query.$or = [
-        { paymentCode: { $regex: search, $options: 'i' } },
-        { 'shippingAddress.fullName': { $regex: search, $options: 'i' } },
-        { 'shippingAddress.phone': { $regex: search, $options: 'i' } },
-        { 'refund.reason': { $regex: search, $options: 'i' } },
-        { 'refund.status': { $regex: search, $options: 'i' } },
-        { 'refund.currentOwnerRole': { $regex: search, $options: 'i' } },
-        { 'refund.nextActionCode': { $regex: search, $options: 'i' } },
+        { paymentCode: { $regex: search, $options: "i" } },
+        { "shippingAddress.fullName": { $regex: search, $options: "i" } },
+        { "shippingAddress.phone": { $regex: search, $options: "i" } },
       ];
     }
 
-    const [orders, total] = await Promise.all([
+    const [cases, total] = await Promise.all([
       Order.find(query)
-        .select(
-          '_id paymentCode paymentMethod total paidAmount note createdAt shippingAddress refund',
-        )
-        .sort({ 'refund.requestedAt': -1, updatedAt: -1 })
+        .populate([
+          { path: "userId", select: "name email role" },
+          { path: "storeId", select: "name code type status city district" },
+        ])
+        .sort({ updatedAt: -1, createdAt: -1 })
         .skip(skip)
         .limit(limit),
       Order.countDocuments(query),
     ]);
 
-    const rows = orders.map(mapRefundCase);
-
     return {
-      cases: rows,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      cases,
+      pagination: buildPagination(page, limit, total),
     };
+  }
+
+  async getTicketById(id, currentUser) {
+    assertSupportAccess(currentUser);
+
+    const ticket = await populateTicketQuery(SupportTicket.findById(id));
+    if (!ticket) {
+      throw new AppError("Support ticket not found", 404);
+    }
+
+    const actorUserId = getUserId(currentUser);
+    if (String(ticket.userId?._id || ticket.userId) === String(actorUserId)) {
+      return ticket;
+    }
+
+    assertBusinessTicketAccess(ticket, currentUser);
+    return ticket;
+  }
+
+  async createTicket(currentUser, payload = {}) {
+    assertSupportAccess(currentUser);
+
+    const subject = toTrimmedString(payload.subject, "");
+    const message = toTrimmedString(payload.message, "");
+    if (!subject) {
+      throw new AppError("subject is required", 400);
+    }
+    if (!message) {
+      throw new AppError("message is required", 400);
+    }
+
+    const category = normalizeCategory(payload.category);
+    const orderId = toTrimmedString(payload.orderId || payload.order_id, "");
+    const email = toTrimmedString(payload.email || currentUser?.email, "");
+    const sender = isBusinessUser(currentUser) ? "staff" : "user";
+    const priorityInput = toTrimmedString(payload.priority, "normal").toLowerCase();
+
+    let order = null;
+    if (orderId) {
+      order = await findAccessibleOrder(orderId, currentUser);
+    }
+
+    let status = "open";
+    let warranty = null;
+    let storeId = normalizeStoreId(order?.storeId);
+
+    if (!storeId) {
+      storeId = await resolveRequestedStoreId(
+        payload.storeId || payload.store_id,
+        currentUser,
+      );
+    }
+
+    if (isWarrantyCategory(category)) {
+      if (!order) {
+        throw new AppError("Warranty requests must reference an order", 400);
+      }
+
+      const orderItemId = toTrimmedString(
+        payload.orderItemId || payload.order_item_id,
+        "",
+      );
+      if (!orderItemId || !mongoose.isValidObjectId(orderItemId)) {
+        throw new AppError("orderItemId is required for warranty requests", 400);
+      }
+
+      const orderItem = (Array.isArray(order.items) ? order.items : []).find(
+        (item) => String(item?._id) === orderItemId,
+      );
+      if (!orderItem) {
+        throw new AppError("Order item not found", 404);
+      }
+
+      const product = await Product.findById(orderItem.productId).select(
+        "_id name fulfillment.warrantyMonths",
+      );
+      if (!product) {
+        throw new AppError("Product not found for warranty request", 404);
+      }
+
+      warranty = buildWarrantySnapshot(order, orderItem, product);
+      status = "requested";
+    }
+
+    if (isBusinessUser(currentUser) && !isManager(currentUser) && !storeId) {
+      throw new AppError(
+        "storeId is required when staff creates a ticket without a store-linked order",
+        400,
+      );
+    }
+
+    const ticketUserId = order?.userId || getUserId(currentUser);
+
+    const created = await SupportTicket.create({
+      userId: ticketUserId,
+      email,
+      subject,
+      category,
+      status,
+      priority: SUPPORT_PRIORITY_SET.has(priorityInput) ? priorityInput : "normal",
+      orderId: order?._id || null,
+      storeId: storeId || null,
+      warranty,
+      messages: [
+        {
+          sender,
+          message,
+        },
+      ],
+      lastMessageAt: new Date(),
+    });
+
+    return this.getTicketById(created._id, currentUser);
+  }
+
+  async addReply(id, currentUser, payload = {}) {
+    const ticket = await this.getTicketById(id, currentUser);
+    const message = toTrimmedString(payload.message, "");
+    if (!message) {
+      throw new AppError("message is required", 400);
+    }
+
+    const actorUserId = getUserId(currentUser);
+    const isOwner = String(ticket.userId?._id || ticket.userId) === String(actorUserId);
+    if (!isOwner && !isBusinessUser(currentUser)) {
+      throw new AppError("Forbidden", 403);
+    }
+
+    const sender = isBusinessUser(currentUser) ? "staff" : "user";
+    ticket.messages.push({ sender, message });
+    ticket.lastMessageAt = new Date();
+
+    if (!isWarrantyCategory(ticket.category)) {
+      if (sender === "staff" && ticket.status === "open") {
+        ticket.status = "in_progress";
+      }
+      if (sender === "user" && ["resolved", "closed"].includes(ticket.status)) {
+        ticket.status = "in_progress";
+      }
+    }
+
+    await ticket.save();
+    return this.getTicketById(ticket._id, currentUser);
+  }
+
+  async updateStatus(id, currentUser, payload = {}) {
+    if (!isBusinessUser(currentUser)) {
+      throw new AppError("Forbidden", 403);
+    }
+
+    const nextStatus =
+      typeof payload === "string"
+        ? normalizeStatus(payload)
+        : normalizeStatus(payload.status);
+    if (!nextStatus) {
+      throw new AppError("status is required", 400);
+    }
+
+    const ticket = await this.getTicketById(id, currentUser);
+    assertBusinessTicketAccess(ticket, currentUser);
+
+    if (isWarrantyCategory(ticket.category)) {
+      validateWarrantyTransition(ticket.status, nextStatus, currentUser);
+
+      ticket.status = nextStatus;
+      if (!ticket.warranty) {
+        ticket.warranty = {};
+      }
+
+      const decisionNote = toTrimmedString(payload.decisionNote || payload.note, "");
+      const serviceNote = toTrimmedString(payload.serviceNote, "");
+
+      if (decisionNote) {
+        ticket.warranty.decisionNote = decisionNote;
+      }
+      if (serviceNote) {
+        ticket.warranty.serviceNote = serviceNote;
+      }
+
+      if (nextStatus === "approved") {
+        ticket.warranty.approvedBy = getUserId(currentUser);
+        ticket.warranty.approvedAt = new Date();
+      }
+      if (nextStatus === "completed") {
+        ticket.warranty.completedBy = getUserId(currentUser);
+        ticket.warranty.completedAt = new Date();
+      }
+    } else {
+      if (!GENERAL_STATUS_SET.has(nextStatus)) {
+        throw new AppError("Invalid support ticket status", 400);
+      }
+      ticket.status = nextStatus;
+    }
+
+    ticket.lastMessageAt = new Date();
+    await ticket.save();
+
+    return this.getTicketById(ticket._id, currentUser);
   }
 }
 
 module.exports = new SupportService();
+module.exports.__private = {
+  normalizeCategory,
+  isWarrantyCategory,
+  resolveWarrantyReferenceDate,
+  addMonths,
+  buildWarrantySnapshot,
+  validateWarrantyTransition,
+  buildBusinessTicketVisibilityQuery,
+  resolveRequestedStoreId,
+};

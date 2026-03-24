@@ -98,7 +98,8 @@ const paymentMethodSchema = new mongoose.Schema({
 const eyeSchema = new mongoose.Schema({
     sphere: { type: String, default: '' },
     cyl: { type: String, default: '' },
-    axis: { type: String, default: '' }
+    axis: { type: String, default: '' },
+    add: { type: String, default: '' }
 }, { _id: false });
 
 const prescriptionSchema = new mongoose.Schema({

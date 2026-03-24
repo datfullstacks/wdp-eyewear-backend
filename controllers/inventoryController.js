@@ -3,15 +3,16 @@ const ApiResponse = require('../helpers/response');
 const inventoryService = require('../services/inventoryService');
 
 exports.listReceipts = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, supplier, receiptCode, fromDate, toDate } = req.query;
+  const { page = 1, limit = 10, supplier, receiptCode, fromDate, toDate, storeId } = req.query;
   const result = await inventoryService.listStockReceipts({
     page,
     limit,
     supplier,
     receiptCode,
     fromDate,
-    toDate
-  });
+    toDate,
+    storeId,
+  }, req.user);
 
   ApiResponse.paginate(
     res,
@@ -22,7 +23,7 @@ exports.listReceipts = asyncHandler(async (req, res) => {
 });
 
 exports.getReceiptById = asyncHandler(async (req, res) => {
-  const receipt = await inventoryService.getStockReceiptById(req.params.id);
+  const receipt = await inventoryService.getStockReceiptById(req.params.id, req.user);
   ApiResponse.success(res, receipt, 'Stock receipt retrieved successfully');
 });
 

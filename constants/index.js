@@ -59,6 +59,7 @@ const ORDER_TYPES = {
 const PAYMENT_STATUS = {
   PENDING: 'pending',
   PAID: 'paid',
+  PARTIAL: 'partial',
   FAILED: 'failed',
   REFUNDED: 'refunded'
 };

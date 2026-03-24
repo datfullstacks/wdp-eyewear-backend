@@ -1,6 +1,8 @@
 const Product = require('../models/Product');
+const Store = require('../models/Store');
 const StockReceipt = require('../models/StockReceipt');
 const AppError = require('../errors/AppError');
+const { buildStoreScopedQuery, canAccessStore } = require('../helpers/storeAccess');
 
 function randomDigits(length) {
   let out = '';
@@ -53,6 +55,32 @@ function normalizeNonNegativeNumber(value, fieldName) {
 }
 
 class InventoryService {
+  async resolveStoreId(storeId, currentUser) {
+    const normalizedStoreId = String(storeId || '').trim();
+    if (!normalizedStoreId) {
+      throw new AppError('storeId is required', 400);
+    }
+
+    if (!canAccessStore(currentUser, normalizedStoreId)) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    const exists = await Store.exists({ _id: normalizedStoreId });
+    if (!exists) {
+      throw new AppError('Store not found', 404);
+    }
+
+    return normalizedStoreId;
+  }
+
+  buildScopedQuery(currentUser) {
+    if (!currentUser?.id) {
+      throw new AppError('Unauthorized', 401);
+    }
+
+    return { ...buildStoreScopedQuery(currentUser, 'storeId') };
+  }
+
   async resolveReceiptItems(itemsInput = []) {
     if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
       throw new AppError('items is required', 400);
@@ -106,6 +134,7 @@ class InventoryService {
     if (Number.isNaN(receivedAt.getTime())) {
       throw new AppError('receivedAt is invalid', 400);
     }
+    const storeId = await this.resolveStoreId(payload.storeId || payload.store_id, currentUser);
 
     const items = await this.resolveReceiptItems(payload.items);
 
@@ -125,6 +154,7 @@ class InventoryService {
 
     const receipt = await StockReceipt.create({
       receiptCode,
+      storeId,
       supplier,
       warehouseLocation,
       receivedAt,
@@ -135,17 +165,22 @@ class InventoryService {
       createdBy: currentUser.id
     });
 
-    return StockReceipt.findById(receipt._id).populate({
-      path: 'createdBy',
-      select: 'name email role'
-    });
+    return StockReceipt.findById(receipt._id).populate([
+      { path: 'createdBy', select: 'name email role' },
+      { path: 'storeId', select: 'name code type status city district' },
+    ]);
   }
 
-  async listStockReceipts(options = {}) {
+  async listStockReceipts(options = {}, currentUser) {
     const page = Math.max(1, Number(options.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));
     const skip = (page - 1) * limit;
-    const query = {};
+    const query = this.buildScopedQuery(currentUser);
+
+    if (options.storeId) {
+      const scopedStoreId = await this.resolveStoreId(options.storeId, currentUser);
+      query.storeId = scopedStoreId;
+    }
 
     if (options.supplier) {
       query.supplier = { $regex: String(options.supplier).trim(), $options: 'i' };
@@ -172,6 +207,7 @@ class InventoryService {
     const [receipts, total] = await Promise.all([
       StockReceipt.find(query)
         .populate({ path: 'createdBy', select: 'name email role' })
+        .populate({ path: 'storeId', select: 'name code type status city district' })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit),
@@ -189,9 +225,13 @@ class InventoryService {
     };
   }
 
-  async getStockReceiptById(id) {
-    const receipt = await StockReceipt.findById(id)
+  async getStockReceiptById(id, currentUser) {
+    const receipt = await StockReceipt.findOne({
+      _id: id,
+      ...this.buildScopedQuery(currentUser),
+    })
       .populate({ path: 'createdBy', select: 'name email role' })
+      .populate({ path: 'storeId', select: 'name code type status city district' })
       .populate({ path: 'items.productId', select: 'name type brand status' });
 
     if (!receipt) throw new AppError('Stock receipt not found', 404);

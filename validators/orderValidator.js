@@ -100,6 +100,7 @@ exports.patchOrderItemRules = [
 
 exports.cancelOrderRules = [
   body('reason').optional().isString().isLength({ max: 500 }),
+  body('responsibility').optional().isIn(['customer', 'system', 'carrier', 'mixed']),
   body(['contactChannels', 'contact_channels']).optional().isArray(),
   body(['contactChannels.*', 'contact_channels.*'])
     .optional()
@@ -283,6 +284,20 @@ exports.updateOrderOpsExecutionRules = [
     .isString()
     .isLength({ max: 120 }),
   body('salesHandoffNote')
+    .optional({ nullable: true })
+    .isString()
+    .isLength({ max: 1000 }),
+  body('approvalState')
+    .optional({ nullable: true })
+    .isIn(['none', 'manager_review_requested', 'sent_back_to_sale']),
+  body('managerReviewRequestedAt')
+    .optional({ nullable: true })
+    .isISO8601(),
+  body('managerReviewRequestedBy')
+    .optional({ nullable: true })
+    .isString()
+    .isLength({ max: 120 }),
+  body('managerReviewReason')
     .optional({ nullable: true })
     .isString()
     .isLength({ max: 1000 }),

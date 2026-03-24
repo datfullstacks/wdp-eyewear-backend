@@ -2,6 +2,7 @@ const express = require('express');
 const promotionController = require('../controllers/promotionController');
 const { protect, authorize } = require('../middlewares/auth');
 const { validate, validateId } = require('../middlewares/validator');
+const { BUSINESS_MANAGER_ROLES } = require('../helpers/roles');
 const {
   validatePromotionRules,
   createPromotionRules,
@@ -135,13 +136,13 @@ const router = express.Router();
 router.get(
   '/',
   protect,
-  authorize('manager', 'admin'),
+  authorize(...BUSINESS_MANAGER_ROLES),
   promotionController.listPromotions
 );
 router.post(
   '/',
   protect,
-  authorize('manager', 'admin'),
+  authorize(...BUSINESS_MANAGER_ROLES),
   createPromotionRules,
   validate,
   promotionController.createPromotion
@@ -150,7 +151,7 @@ router.post('/validate', validatePromotionRules, validate, promotionController.v
 router.get(
   '/:id',
   protect,
-  authorize('manager', 'admin'),
+  authorize(...BUSINESS_MANAGER_ROLES),
   validateId,
   validate,
   promotionController.getPromotionById
@@ -158,7 +159,7 @@ router.get(
 router.put(
   '/:id',
   protect,
-  authorize('manager', 'admin'),
+  authorize(...BUSINESS_MANAGER_ROLES),
   validateId,
   updatePromotionRules,
   validate,
@@ -167,7 +168,7 @@ router.put(
 router.delete(
   '/:id',
   protect,
-  authorize('manager', 'admin'),
+  authorize(...BUSINESS_MANAGER_ROLES),
   validateId,
   validate,
   promotionController.deletePromotion
