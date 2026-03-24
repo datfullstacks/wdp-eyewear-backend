@@ -3,6 +3,7 @@ const router = express.Router();
 const productController = require('../controllers/productController');
 const { protect, authorize } = require('../middlewares/auth');
 const { validate, validateId } = require('../middlewares/validator');
+const { BUSINESS_MANAGER_ROLES } = require('../helpers/roles');
 const { 
     createProductRules, 
     updateProductRules, 
@@ -419,7 +420,7 @@ router.use(protect);
  *             schema:
  *               $ref: '#/components/schemas/Product'
  */
-router.post('/', authorize('manager'), createProductRules, validate, productController.createProduct);
+router.post('/', authorize(...BUSINESS_MANAGER_ROLES), createProductRules, validate, productController.createProduct);
 
 /**
  * @swagger
@@ -446,7 +447,7 @@ router.post('/', authorize('manager'), createProductRules, validate, productCont
  *       200:
  *         description: Product updated
  */
-router.put('/:id', authorize('manager'), validateId, updateProductRules, validate, productController.updateProduct);
+router.put('/:id', authorize(...BUSINESS_MANAGER_ROLES), validateId, updateProductRules, validate, productController.updateProduct);
 
 /**
  * @swagger
@@ -467,6 +468,6 @@ router.put('/:id', authorize('manager'), validateId, updateProductRules, validat
  *       200:
  *         description: Product deleted
  */
-router.delete('/:id', authorize('manager'), validateId, validate, productController.deleteProduct);
+router.delete('/:id', authorize(...BUSINESS_MANAGER_ROLES), validateId, validate, productController.deleteProduct);
 
 module.exports = router;

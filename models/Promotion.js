@@ -4,6 +4,7 @@ const { Schema } = mongoose;
 
 const PROMOTION_TYPES = ['percent', 'fixed'];
 const CART_TYPES = ['ready_stock', 'pre_order'];
+const PAYMENT_SCOPES = ['all', 'sepay', 'cod'];
 
 const PromotionSchema = new Schema(
   {
@@ -47,6 +48,11 @@ const PromotionSchema = new Schema(
       enum: [...CART_TYPES, 'all'],
       default: 'all'
     },
+    paymentScope: {
+      type: String,
+      enum: PAYMENT_SCOPES,
+      default: 'all'
+    },
     applicableCategories: {
       type: [String],
       default: ['all']
@@ -70,5 +76,6 @@ PromotionSchema.index({ active: 1, startsAt: 1, endsAt: 1 });
 module.exports = {
   Promotion: mongoose.model('Promotion', PromotionSchema),
   PROMOTION_TYPES,
-  PROMOTION_CART_TYPES: CART_TYPES
+  PROMOTION_CART_TYPES: CART_TYPES,
+  PROMOTION_PAYMENT_SCOPES: PAYMENT_SCOPES
 };

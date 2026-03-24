@@ -1,5 +1,9 @@
 const { body } = require("express-validator");
-const { PROMOTION_TYPES, PROMOTION_CART_TYPES } = require("../models/Promotion");
+const {
+  PROMOTION_TYPES,
+  PROMOTION_CART_TYPES,
+  PROMOTION_PAYMENT_SCOPES,
+} = require("../models/Promotion");
 
 exports.validatePromotionRules = [
   body("voucherCode")
@@ -58,6 +62,10 @@ exports.validatePromotionRules = [
     .optional()
     .isIn(["ready_stock", "pre_order"])
     .withMessage("cartType must be ready_stock or pre_order"),
+  body(["paymentMethod", "payment_method"])
+    .optional()
+    .isIn(["sepay", "cod"])
+    .withMessage("paymentMethod must be sepay or cod"),
 ];
 
 const basePromotionRules = [
@@ -109,6 +117,10 @@ const basePromotionRules = [
     .optional()
     .isIn([...PROMOTION_CART_TYPES, "all"])
     .withMessage("cartType is invalid"),
+  body("paymentScope")
+    .optional()
+    .isIn(PROMOTION_PAYMENT_SCOPES)
+    .withMessage("paymentScope is invalid"),
   body("status")
     .optional()
     .isIn(["active", "inactive", "scheduled"])

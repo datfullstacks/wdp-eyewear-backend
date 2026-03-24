@@ -48,6 +48,7 @@ const PreorderReceiptSchema = new Schema(
 const PreorderBatchSchema = new Schema(
   {
     batchCode: { type: String, required: true, unique: true, trim: true, uppercase: true },
+    storeId: { type: Schema.Types.ObjectId, ref: 'Store', default: null },
     supplier: { type: String, required: true, trim: true },
     orderDate: { type: Date, required: true },
     expectedDate: { type: Date },
@@ -73,6 +74,7 @@ const PreorderBatchSchema = new Schema(
 );
 
 PreorderBatchSchema.index({ status: 1, createdAt: -1 });
+PreorderBatchSchema.index({ storeId: 1, createdAt: -1 });
 PreorderBatchSchema.index({ supplier: 1, createdAt: -1 });
 PreorderBatchSchema.index({ expectedDate: 1 });
 

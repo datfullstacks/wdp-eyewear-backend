@@ -102,7 +102,6 @@ exports.updatePolicy = asyncHandler(async (req, res) => {
     },
     { new: true, runValidators: true },
   );
-
   if (!policy) {
     return ApiResponse.notFound(res, "Policy not found");
   }

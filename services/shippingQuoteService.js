@@ -52,6 +52,22 @@ function normalizeShippingMethod(method) {
     : "standard";
 }
 
+function normalizePhoneDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function normalizeGhnPhone(value) {
+  const digits = normalizePhoneDigits(value);
+  if (/^84[35789]\d{8}$/.test(digits)) {
+    return `0${digits.slice(2)}`;
+  }
+  return digits;
+}
+
+function isValidGhnPhone(value) {
+  return /^0[35789]\d{8}$/.test(normalizeGhnPhone(value));
+}
+
 function mapStore(raw = {}) {
   return {
     id: normalizePositiveInteger(raw._id),
@@ -113,7 +129,7 @@ function hasCompleteOriginStore(store = {}) {
       normalizePositiveInteger(store?.districtId) &&
       toTrimmedString(store?.wardCode) &&
       toTrimmedString(store?.name) &&
-      toTrimmedString(store?.phone) &&
+      isValidGhnPhone(store?.phone) &&
       toTrimmedString(store?.address),
   );
 }
@@ -134,7 +150,9 @@ async function hydrateOriginStoreFromRemote(originStore = {}) {
     districtId: normalizePositiveInteger(originStore?.districtId) || remoteStore.districtId,
     wardCode: toTrimmedString(originStore?.wardCode) || remoteStore.wardCode,
     name: toTrimmedString(originStore?.name) || remoteStore.name,
-    phone: toTrimmedString(originStore?.phone) || remoteStore.phone,
+    phone: isValidGhnPhone(originStore?.phone)
+      ? normalizeGhnPhone(originStore?.phone)
+      : toTrimmedString(remoteStore.phone),
     address: toTrimmedString(originStore?.address) || remoteStore.address,
   };
 }

@@ -174,6 +174,14 @@ const OpsExecutionSchema = new mongoose.Schema(
     salesApprovedAt: { type: Date },
     salesApprovedBy: { type: String, default: "" },
     salesHandoffNote: { type: String, default: "" },
+    approvalState: {
+      type: String,
+      enum: ["none", "manager_review_requested", "sent_back_to_sale"],
+      default: "none",
+    },
+    managerReviewRequestedAt: { type: Date },
+    managerReviewRequestedBy: { type: String, default: "" },
+    managerReviewReason: { type: String, default: "" },
     internalNote: { type: String, default: "" },
     holdReason: {
       type: String,
@@ -263,6 +271,27 @@ const RefundHistoryEntrySchema = new mongoose.Schema(
   { _id: false },
 );
 
+const PromotionAppliedSchema = new mongoose.Schema(
+  {
+    promotionId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Promotion",
+      default: null,
+    },
+    code: { type: String, default: "" },
+    name: { type: String, default: "" },
+    type: { type: String, default: "" },
+    value: { type: Number, min: 0, default: 0 },
+    maxDiscount: { type: Number, min: 0, default: 0 },
+    minOrderValue: { type: Number, min: 0, default: 0 },
+    cartType: { type: String, default: "all" },
+    paymentScope: { type: String, default: "all" },
+    applicableCategories: { type: [String], default: [] },
+    discountAmountApplied: { type: Number, min: 0, default: 0 },
+  },
+  { _id: false },
+);
+
 const OrderSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -313,6 +342,7 @@ const OrderSchema = new mongoose.Schema(
     },
     shippingAddress: ShippingAddressSchema,
     voucherCode: { type: String, trim: true, uppercase: true, default: "" },
+    promotionApplied: { type: PromotionAppliedSchema, default: null },
     note: String,
     paymentCode: { type: String },
     sepayTransactionId: String,

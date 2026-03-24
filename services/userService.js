@@ -10,6 +10,7 @@ const { emitNotificationEvent } = require('../realtime/websocket');
 const {
   ROLE,
   normalizeRole,
+  getListableUserRoles,
   canManageUserRole,
   canReadUserRecord,
   canDeleteUser
@@ -589,7 +590,8 @@ class UserService {
     const normalizeEye = (eye) => ({
       sphere: String(eye?.sphere ?? '').trim(),
       cyl: String(eye?.cyl ?? '').trim(),
-      axis: String(eye?.axis ?? '').trim()
+      axis: String(eye?.axis ?? '').trim(),
+      add: String(eye?.add ?? '').trim(),
     });
     if (input.rightEye !== undefined) payload.rightEye = normalizeEye(input.rightEye);
     if (input.leftEye !== undefined) payload.leftEye = normalizeEye(input.leftEye);
@@ -808,9 +810,26 @@ class UserService {
 
   // Get all users with pagination
   async getAllUsers(page = 1, limit = 10, filters = {}, currentUser) {
-    const query = this.buildUserQuery(filters);
-    const actorStoreIds = getAccessibleStoreIds(currentUser);
     const normalizedRoleFilter = normalizeRole(filters.role);
+    const listableRoles = getListableUserRoles(currentUser);
+    const actorStoreIds = getAccessibleStoreIds(currentUser);
+
+    if (!listableRoles.length) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    if (normalizedRoleFilter && !listableRoles.includes(normalizedRoleFilter)) {
+      throw new AppError('Forbidden', 403);
+    }
+
+    const query = this.buildUserQuery({
+      ...filters,
+      role: normalizedRoleFilter || undefined,
+    });
+
+    if (!normalizedRoleFilter) {
+      query.role = { $in: listableRoles };
+    }
 
     if (actorStoreIds === null) {
       const skip = (page - 1) * limit;
@@ -835,45 +854,20 @@ class UserService {
       };
     }
 
-    if (normalizedRoleFilter === ROLE.CUSTOMER) {
-      const accessibleCustomerIds = await Order.distinct('userId', {
-        storeId: { $in: actorStoreIds },
-        userId: { $ne: null }
-      });
-      const customerQuery = {
-        ...query,
-        role: ROLE.CUSTOMER,
-        _id: { $in: accessibleCustomerIds }
-      };
-      const skip = (page - 1) * limit;
-      const [users, total] = await Promise.all([
-        User.find(customerQuery)
-          .select('-password')
-          .populate(USER_STORE_POPULATE)
-          .skip(skip)
-          .limit(limit)
-          .sort({ createdAt: -1 }),
-        User.countDocuments(customerQuery)
-      ]);
-
-      return {
-        users,
-        pagination: {
-          page,
-          limit,
-          total,
-          totalPages: Math.ceil(total / limit)
-        }
-      };
-    }
-
     const candidates = await User.find(query)
       .select('-password')
       .populate(USER_STORE_POPULATE)
       .sort({ createdAt: -1 });
-    const filteredUsers = candidates.filter((user) =>
-      this.canActorAccessBusinessUser(currentUser, user)
+    const accessFlags = await Promise.all(
+      candidates.map(async (user) => {
+        if (normalizeRole(user.role) === ROLE.CUSTOMER) {
+          return this.canActorAccessCustomer(currentUser, user._id);
+        }
+
+        return this.canActorAccessBusinessUser(currentUser, user);
+      })
     );
+    const filteredUsers = candidates.filter((user, index) => Boolean(accessFlags[index]));
     const { rows, pagination } = this.paginateRows(filteredUsers, page, limit);
 
     return {
@@ -1038,9 +1032,20 @@ class UserService {
 
   // Get user statistics
   async getUserStats(currentUser) {
+    const visibleRoles = getListableUserRoles(currentUser);
     const actorStoreIds = getAccessibleStoreIds(currentUser);
+
+    if (!visibleRoles.length) {
+      throw new AppError('Forbidden', 403);
+    }
+
     if (actorStoreIds === null) {
       const stats = await User.aggregate([
+        {
+          $match: {
+            role: { $in: visibleRoles }
+          }
+        },
         {
           $group: {
             _id: '$role',
@@ -1049,7 +1054,9 @@ class UserService {
         }
       ]);
 
-      const total = await User.countDocuments();
+      const total = await User.countDocuments({
+        role: { $in: visibleRoles }
+      });
 
       return {
         total,
@@ -1060,31 +1067,30 @@ class UserService {
       };
     }
 
-    const businessUsers = await User.find({
-      role: { $in: [ROLE.STAFF, ROLE.OPERATION, ROLE.MANAGER, ROLE.ADMIN] }
+    const candidates = await User.find({
+      role: { $in: visibleRoles }
     })
       .select('-password')
       .populate(USER_STORE_POPULATE);
-    const accessibleBusinessUsers = businessUsers.filter((user) =>
-      this.canActorAccessBusinessUser(currentUser, user)
-    );
-    const customerIds = await Order.distinct('userId', {
-      storeId: { $in: actorStoreIds },
-      userId: { $ne: null }
-    });
-    const customerCount = await User.countDocuments({
-      _id: { $in: customerIds },
-      role: ROLE.CUSTOMER
-    });
+    const accessFlags = await Promise.all(
+      candidates.map(async (user) => {
+        if (normalizeRole(user.role) === ROLE.CUSTOMER) {
+          return this.canActorAccessCustomer(currentUser, user._id);
+        }
 
-    const byRole = accessibleBusinessUsers.reduce((acc, user) => {
+        return this.canActorAccessBusinessUser(currentUser, user);
+      })
+    );
+    const accessibleUsers = candidates.filter((user, index) => Boolean(accessFlags[index]));
+
+    const byRole = accessibleUsers.reduce((acc, user) => {
       const roleKey = normalizeRole(user.role) || ROLE.CUSTOMER;
       acc[roleKey] = Number(acc[roleKey] || 0) + 1;
       return acc;
-    }, { [ROLE.CUSTOMER]: customerCount });
+    }, {});
 
     return {
-      total: customerCount + accessibleBusinessUsers.length,
+      total: accessibleUsers.length,
       byRole
     };
   }

@@ -3,14 +3,15 @@ const ApiResponse = require('../helpers/response');
 const preorderService = require('../services/preorderService');
 
 exports.listBatches = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 10, status, supplier, search } = req.query;
+  const { page = 1, limit = 10, status, supplier, search, storeId } = req.query;
   const result = await preorderService.listBatches({
     page,
     limit,
     status,
     supplier,
-    search
-  });
+    search,
+    storeId,
+  }, req.user);
 
   ApiResponse.paginate(
     res,
@@ -21,7 +22,7 @@ exports.listBatches = asyncHandler(async (req, res) => {
 });
 
 exports.getBatchById = asyncHandler(async (req, res) => {
-  const batch = await preorderService.getBatchById(req.params.id);
+  const batch = await preorderService.getBatchById(req.params.id, req.user);
   ApiResponse.success(res, batch, 'Preorder batch retrieved successfully');
 });
 

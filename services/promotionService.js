@@ -1,5 +1,6 @@
 const AppError = require('../errors/AppError');
 const { Promotion } = require('../models/Promotion');
+const promotionRedemptionService = require('./promotionRedemptionService');
 
 function normalizeCode(value) {
   return String(value || '').trim().toUpperCase();
@@ -17,7 +18,62 @@ function isApplicableCartType(promotion, cartType) {
   return promotion.cartType === cartType;
 }
 
-function assertPromotionActive(promotion, nowMs) {
+function normalizePaymentMethod(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'sepay' || normalized === 'cod') return normalized;
+  return '';
+}
+
+function normalizeCategories(categories = []) {
+  const normalized = (Array.isArray(categories) ? categories : [categories])
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean);
+
+  return normalized.length > 0 ? [...new Set(normalized)] : ['all'];
+}
+
+function buildCategorySet(items = []) {
+  return new Set(
+    (Array.isArray(items) ? items : [])
+      .map((item) => String(item?.type || item?.catalogType || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function assertApplicablePaymentScope(promotion, paymentMethod) {
+  const scope = String(promotion?.paymentScope || 'all').trim().toLowerCase() || 'all';
+  const normalizedMethod = normalizePaymentMethod(paymentMethod);
+
+  if (!scope || scope === 'all' || !normalizedMethod) {
+    return;
+  }
+
+  if (scope !== normalizedMethod) {
+    const paymentLabel = scope === 'cod' ? 'COD' : 'SePay';
+    throw new AppError(`Voucher is only applicable for ${paymentLabel} payments`, 400);
+  }
+}
+
+function assertApplicableCategories(promotion, items = []) {
+  const categories = normalizeCategories(promotion?.applicableCategories);
+  if (categories.includes('all')) return;
+
+  const itemCategories = buildCategorySet(items);
+  if (itemCategories.size === 0) return;
+
+  const hasInvalidCategory = [...itemCategories].some(
+    (category) => !categories.includes(category),
+  );
+
+  if (hasInvalidCategory) {
+    throw new AppError(
+      'Voucher is not applicable for one or more product categories in this order',
+      400,
+    );
+  }
+}
+
+function assertPromotionActive(promotion, nowMs, usageSummary) {
   if (!promotion || !promotion.active) {
     throw new AppError('Voucher not found or inactive', 400);
   }
@@ -37,7 +93,8 @@ function assertPromotionActive(promotion, nowMs) {
   }
 
   const usageLimit = normalizeNonNegativeNumber(promotion.usageLimit, 0);
-  if (usageLimit > 0 && normalizeNonNegativeNumber(promotion.usedCount, 0) >= usageLimit) {
+  const activeUsageCount = normalizeNonNegativeNumber(usageSummary?.activeCount, 0);
+  if (usageLimit > 0 && activeUsageCount >= usageLimit) {
     throw new AppError('Voucher usage limit reached', 400);
   }
 }
@@ -66,25 +123,44 @@ function computeDiscount(promotion, subtotal) {
   return Math.max(0, Math.min(discount, safeSubtotal));
 }
 
-async function resolvePromotion({ voucherCode, subtotal, cartType, throwOnInvalid = true }) {
+async function resolvePromotion({
+  voucherCode,
+  subtotal,
+  cartType,
+  items = [],
+  paymentMethod = '',
+  excludeOrderId = '',
+  throwOnInvalid = true,
+}) {
   const code = normalizeCode(voucherCode);
   if (!code) {
     return {
       voucherCode: null,
       promotion: null,
-      discountAmount: 0
+      discountAmount: 0,
+      usageSummary: null,
     };
   }
 
   const promotion = await Promotion.findOne({ code });
   const nowMs = Date.now();
+  const usageSummary = promotion
+    ? (await promotionRedemptionService.getPromotionUsageSummaryMap([promotion], {
+        excludeOrderId,
+      })).get(
+        String(promotion._id),
+      ) || null
+    : null;
 
   try {
-    assertPromotionActive(promotion, nowMs);
+    assertPromotionActive(promotion, nowMs, usageSummary);
 
     if (!isApplicableCartType(promotion, cartType)) {
       throw new AppError('Voucher is not applicable for this cart type', 400);
     }
+
+    assertApplicablePaymentScope(promotion, paymentMethod);
+    assertApplicableCategories(promotion, items);
 
     const minOrderValue = normalizeNonNegativeNumber(promotion?.minOrderValue, 0);
     const safeSubtotal = normalizeNonNegativeNumber(subtotal, 0);
@@ -97,6 +173,7 @@ async function resolvePromotion({ voucherCode, subtotal, cartType, throwOnInvali
       voucherCode: code,
       promotion: promotion || null,
       discountAmount: 0,
+      usageSummary,
       invalidReason: error.message || 'Invalid voucher'
     };
   }
@@ -104,24 +181,41 @@ async function resolvePromotion({ voucherCode, subtotal, cartType, throwOnInvali
   return {
     voucherCode: code,
     promotion,
-    discountAmount: computeDiscount(promotion, subtotal)
+    discountAmount: computeDiscount(promotion, subtotal),
+    usageSummary,
   };
 }
 
-function toPromotionMeta(promotion) {
+function toPromotionMeta(promotion, usageSummary = null) {
   if (!promotion) return null;
   return {
+    id: String(promotion._id),
     code: promotion.code,
     name: promotion.name,
     type: promotion.type,
     value: promotion.value,
     maxDiscount: promotion.maxDiscount || 0,
     minOrderValue: promotion.minOrderValue || 0,
-    cartType: promotion.cartType || 'all'
+    cartType: promotion.cartType || 'all',
+    paymentScope: promotion.paymentScope || 'all',
+    applicableCategories: normalizeCategories(promotion.applicableCategories),
+    reservedCount: Number(usageSummary?.reservedCount || 0),
+    usedCount:
+      usageSummary?.usedCount !== undefined
+        ? Number(usageSummary.usedCount)
+        : Number(promotion.usedCount || 0),
+    remainingCount:
+      usageSummary?.remainingCount !== undefined ? usageSummary.remainingCount : null,
   };
 }
 
 module.exports = {
   resolvePromotion,
-  toPromotionMeta
+  toPromotionMeta,
+  __private: {
+    normalizeCategories,
+    buildCategorySet,
+    assertApplicablePaymentScope,
+    assertApplicableCategories,
+  },
 };

@@ -20,6 +20,7 @@ const ReceiptItemSchema = new Schema(
 const StockReceiptSchema = new Schema(
   {
     receiptCode: { type: String, required: true, unique: true, trim: true, uppercase: true },
+    storeId: { type: Schema.Types.ObjectId, ref: 'Store', default: null },
     supplier: { type: String, required: true, trim: true },
     warehouseLocation: { type: String, default: '', trim: true },
     receivedAt: { type: Date, default: Date.now },
@@ -39,6 +40,7 @@ const StockReceiptSchema = new Schema(
 );
 
 StockReceiptSchema.index({ supplier: 1, createdAt: -1 });
+StockReceiptSchema.index({ storeId: 1, createdAt: -1 });
 StockReceiptSchema.index({ receivedAt: -1 });
 
 module.exports = mongoose.model('StockReceipt', StockReceiptSchema);

@@ -1,6 +1,7 @@
 const asyncHandler = require("../helpers/asyncHandler");
 const ApiResponse = require("../helpers/response");
 const orderService = require("../services/orderService");
+const promotionRedemptionService = require("../services/promotionRedemptionService");
 const { Promotion } = require("../models/Promotion");
 
 function normalizeStatus(promotion) {
@@ -15,7 +16,12 @@ function normalizeStatus(promotion) {
   return "active";
 }
 
-function toPromotionPayload(promotion) {
+function toPromotionPayload(promotion, usageSummary = null) {
+  const usedCount =
+    usageSummary?.usedCount !== undefined
+      ? Number(usageSummary.usedCount)
+      : Number(promotion.usedCount || 0);
+
   return {
     id: String(promotion._id),
     code: promotion.code,
@@ -28,11 +34,16 @@ function toPromotionPayload(promotion) {
     startDate: promotion.startsAt,
     endDate: promotion.endsAt,
     usageLimit: Number(promotion.usageLimit || 0),
-    usageCount: Number(promotion.usedCount || 0),
+    usageCount: usedCount,
+    usedCount,
+    reservedCount: Number(usageSummary?.reservedCount || 0),
+    remainingCount:
+      usageSummary?.remainingCount !== undefined ? usageSummary.remainingCount : null,
     applicableCategories: Array.isArray(promotion.applicableCategories)
       ? promotion.applicableCategories
       : ["all"],
     cartType: promotion.cartType || "all",
+    paymentScope: promotion.paymentScope || "all",
     status: normalizeStatus(promotion),
     active: Boolean(promotion.active),
     createdAt: promotion.createdAt,
@@ -118,6 +129,8 @@ function normalizePromotionInput(body = {}) {
     startsAt: body.startDate || body.startsAt || null,
     endsAt: body.endDate || body.endsAt || null,
     cartType: String(body.cartType || "all").trim().toLowerCase() || "all",
+    paymentScope:
+      String(body.paymentScope || "all").trim().toLowerCase() || "all",
     usageLimit: parseNumber(body.usageLimit, 0),
     applicableCategories: categories.length > 0 ? categories : ["all"],
   };
@@ -146,6 +159,7 @@ const normalizeInput = (body) => {
     shippingMethod: body.shippingMethod || body.shipping_method,
     shippingAddress: body.shippingAddress || body.shipping_address,
     cartType: body.cartType || body.cart_type,
+    paymentMethod: body.paymentMethod || body.payment_method,
   };
 };
 
@@ -159,10 +173,13 @@ exports.listPromotions = asyncHandler(async (req, res) => {
     Promotion.find(filters).sort({ createdAt: -1 }).skip(skip).limit(limit),
     Promotion.countDocuments(filters),
   ]);
+  const usageMap = await promotionRedemptionService.getPromotionUsageSummaryMap(rows);
 
   ApiResponse.paginate(
     res,
-    rows.map(toPromotionPayload),
+    rows.map((promotion) =>
+      toPromotionPayload(promotion, usageMap.get(String(promotion._id)) || null),
+    ),
     { page, limit, total },
     "Promotions retrieved successfully",
   );
@@ -171,9 +188,10 @@ exports.listPromotions = asyncHandler(async (req, res) => {
 exports.createPromotion = asyncHandler(async (req, res) => {
   const payload = normalizePromotionInput(req.body);
   const promotion = await Promotion.create(payload);
+  const usageMap = await promotionRedemptionService.getPromotionUsageSummaryMap([promotion]);
   ApiResponse.created(
     res,
-    toPromotionPayload(promotion),
+    toPromotionPayload(promotion, usageMap.get(String(promotion._id)) || null),
     "Promotion created successfully",
   );
 });
@@ -184,7 +202,11 @@ exports.getPromotionById = asyncHandler(async (req, res) => {
     return ApiResponse.notFound(res, "Promotion not found");
   }
 
-  ApiResponse.success(res, toPromotionPayload(promotion));
+  const usageMap = await promotionRedemptionService.getPromotionUsageSummaryMap([promotion]);
+  ApiResponse.success(
+    res,
+    toPromotionPayload(promotion, usageMap.get(String(promotion._id)) || null),
+  );
 });
 
 exports.updatePromotion = asyncHandler(async (req, res) => {
@@ -198,9 +220,10 @@ exports.updatePromotion = asyncHandler(async (req, res) => {
     return ApiResponse.notFound(res, "Promotion not found");
   }
 
+  const usageMap = await promotionRedemptionService.getPromotionUsageSummaryMap([promotion]);
   ApiResponse.success(
     res,
-    toPromotionPayload(promotion),
+    toPromotionPayload(promotion, usageMap.get(String(promotion._id)) || null),
     "Promotion updated successfully",
   );
 });
@@ -220,6 +243,7 @@ exports.validateVoucher = asyncHandler(async (req, res) => {
   const quote = await orderService.quote(input.items, input.shippingFee, 0, {
     cartType: input.cartType,
     voucherCode: input.voucherCode,
+    paymentMethod: input.paymentMethod,
     shippingMethod: input.shippingMethod,
     shippingAddress: input.shippingAddress,
   });

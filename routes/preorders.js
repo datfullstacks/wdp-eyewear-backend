@@ -92,9 +92,11 @@ const router = express.Router();
  *           $ref: '#/components/schemas/User'
  *     PreorderBatchInput:
  *       type: object
- *       required: [batchCode, supplier, orderDate, items]
+ *       required: [batchCode, storeId, supplier, orderDate, items]
  *       properties:
  *         batchCode:
+ *           type: string
+ *         storeId:
  *           type: string
  *         supplier:
  *           type: string
@@ -141,6 +143,8 @@ const router = express.Router();
  *         _id:
  *           type: string
  *         batchCode:
+ *           type: string
+ *         storeId:
  *           type: string
  *         supplier:
  *           type: string
@@ -201,6 +205,10 @@ const router = express.Router();
  *           type: string
  *           enum: [pending, in_transit, partial, completed, delayed]
  *       - in: query
+ *         name: storeId
+ *         schema:
+ *           type: string
+ *       - in: query
  *         name: supplier
  *         schema:
  *           type: string
@@ -236,7 +244,7 @@ const router = express.Router();
  *                     totalPages:
  *                       type: integer
  *   post:
- *     summary: Create a new preorder batch
+ *     summary: Create a new preorder batch scoped to a store
  *     tags: [Preorders]
  *     security:
  *       - bearerAuth: []
@@ -288,6 +296,8 @@ const router = express.Router();
  *                   $ref: '#/components/schemas/PreorderBatch'
  *       404:
  *         description: Preorder batch not found
+ *       403:
+ *         description: Store-scoped user cannot access this batch
  * /api/preorders/batches/{id}/receive:
  *   post:
  *     summary: Confirm receipt for one or more preorder batch items
