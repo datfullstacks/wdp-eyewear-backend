@@ -30,6 +30,7 @@
     "express": "~4.16.1",
     "express-validator": "^7.3.1",
     "helmet": "^8.1.0",
+    "https-proxy-agent": "^7.0.6",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.2",
     "morgan": "~1.9.1",
