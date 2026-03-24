@@ -2,6 +2,7 @@ const asyncHandler = require("../helpers/asyncHandler");
 const ApiResponse = require("../helpers/response");
 const { SystemConfig } = require("../models/SystemConfig");
 const { getOrCreateSystemConfig } = require("../helpers/systemConfig");
+const AppError = require("../errors/AppError");
 
 function toPayload(config) {
   return {
@@ -40,6 +41,14 @@ exports.getSystemConfig = asyncHandler(async (req, res) => {
 
 exports.updateSystemConfig = asyncHandler(async (req, res) => {
   const current = await getOrCreateSystemConfig();
+  const payload =
+    req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body
+      : null;
+
+  if (!payload || Object.keys(payload).length === 0) {
+    throw new AppError("Request body must be a non-empty JSON object", 400);
+  }
 
   const nextConfig = await SystemConfig.findByIdAndUpdate(
     current._id,
@@ -47,37 +56,41 @@ exports.updateSystemConfig = asyncHandler(async (req, res) => {
       $set: {
         featureFlags: {
           ...current.featureFlags?.toObject?.(),
-          ...(req.body.featureFlags || {}),
+          ...(payload.featureFlags || {}),
         },
         payments: {
           ...current.payments?.toObject?.(),
-          ...(req.body.payments || {}),
+          ...(payload.payments || {}),
         },
         shipping: {
           ...current.shipping?.toObject?.(),
-          ...(req.body.shipping || {}),
+          ...(payload.shipping || {}),
         },
         notifications: {
           ...current.notifications?.toObject?.(),
-          ...(req.body.notifications || {}),
+          ...(payload.notifications || {}),
         },
         refunds: {
           ...current.refunds?.toObject?.(),
-          ...(req.body.refunds || {}),
+          ...(payload.refunds || {}),
         },
         integrations: {
           ...current.integrations?.toObject?.(),
-          ...(req.body.integrations || {}),
+          ...(payload.integrations || {}),
         },
         maintenanceMode:
-          typeof req.body.maintenanceMode === "boolean"
-            ? req.body.maintenanceMode
+          typeof payload.maintenanceMode === "boolean"
+            ? payload.maintenanceMode
             : current.maintenanceMode,
         updatedBy: req.user?._id || null,
       },
     },
     { new: true, runValidators: true },
   );
+
+  if (!nextConfig) {
+    throw new AppError("System config not found", 404);
+  }
 
   ApiResponse.success(
     res,
