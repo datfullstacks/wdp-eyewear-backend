@@ -451,11 +451,10 @@ OrderSchema.index({ paymentCode: 1 }, { unique: true, sparse: true });
 OrderSchema.index({ invoiceId: 1 }, { unique: true, sparse: true });
 OrderSchema.index({ "shipment.orderCode": 1 }, { sparse: true });
 
-OrderSchema.pre("validate", function mapLegacyShippingCollectionTiming(next) {
+OrderSchema.pre("validate", function mapLegacyShippingCollectionTiming() {
   if (this.shippingCollectionTiming === "with_balance") {
     this.shippingCollectionTiming = "on_delivery";
   }
-  next();
 });
 
 module.exports = mongoose.model("Order", OrderSchema);
