@@ -1,6 +1,43 @@
 const { body, param } = require('express-validator');
 const { ORDER_OPS_STAGE, ORDER_STATUS } = require('../constants');
 
+function readRefundBankAccount(req) {
+  return req.body?.bankAccount || req.body?.bank_account || null;
+}
+
+function validateRequiredRefundBankAccount(req, { required = false } = {}) {
+  const bankAccount = readRefundBankAccount(req);
+  if (!bankAccount || typeof bankAccount !== 'object') {
+    if (required) {
+      throw new Error('bankAccount is required');
+    }
+    return true;
+  }
+
+  const bankCode = String(bankAccount.bankCode || '').trim();
+  const bankName = String(bankAccount.bankName || '').trim();
+  const accountNumber = String(bankAccount.accountNumber || '').replace(/[^\d]/g, '');
+  const accountHolder = String(bankAccount.accountHolder || '').trim();
+
+  if (!bankCode) {
+    throw new Error('bankAccount.bankCode is required');
+  }
+  if (!bankName) {
+    throw new Error('bankAccount.bankName is required');
+  }
+  if (!accountNumber) {
+    throw new Error('bankAccount.accountNumber is required');
+  }
+  if (!/^\d{8,19}$/.test(accountNumber)) {
+    throw new Error('bankAccount.accountNumber must contain 8 to 19 digits');
+  }
+  if (!accountHolder) {
+    throw new Error('bankAccount.accountHolder is required');
+  }
+
+  return true;
+}
+
 const itemBaseRules = [
   body('items').isArray({ min: 1 }).withMessage('items is required'),
   body(['items.*.productId', 'items.*.product_id'])
@@ -106,6 +143,7 @@ exports.cancelOrderRules = [
     .optional()
     .isIn(['email', 'phone']),
   body(['bankAccount', 'bank_account']).optional().isObject(),
+  body(['bankAccount.bankCode', 'bank_account.bankCode']).optional().isString(),
   body(['bankAccount.bankName', 'bank_account.bankName']).optional().isString(),
   body(['bankAccount.accountNumber', 'bank_account.accountNumber']).optional().isString(),
   body(['bankAccount.accountHolder', 'bank_account.accountHolder']).optional().isString(),
@@ -121,6 +159,7 @@ exports.requestRefundRules = [
   body('requiresReturn').optional().isBoolean(),
   body('note').optional().isString().isLength({ max: 500 }),
   body(['bankAccount', 'bank_account']).optional().isObject(),
+  body(['bankAccount.bankCode', 'bank_account.bankCode']).optional().isString(),
   body(['bankAccount.bankName', 'bank_account.bankName']).optional().isString(),
   body(['bankAccount.accountNumber', 'bank_account.accountNumber']).optional().isString(),
   body(['bankAccount.accountHolder', 'bank_account.accountHolder']).optional().isString(),
@@ -138,6 +177,7 @@ exports.requestRefundRules = [
     .isFloat({ min: 0 }),
   body('evidence').optional().isArray({ max: 6 }),
   body('evidence.*').optional().isURL(),
+  body().custom((_, { req }) => validateRequiredRefundBankAccount(req, { required: true })),
 ];
 
 exports.updateRefundStatusRules = [
@@ -207,6 +247,7 @@ exports.updateRefundStatusRules = [
   body('returnShipmentCode').optional().isString().isLength({ max: 120 }),
   body('returnCarrier').optional().isString().isLength({ max: 80 }),
   body(['bankAccount', 'bank_account']).optional().isObject(),
+  body(['bankAccount.bankCode', 'bank_account.bankCode']).optional().isString(),
   body(['bankAccount.bankName', 'bank_account.bankName']).optional().isString(),
   body(['bankAccount.accountNumber', 'bank_account.accountNumber']).optional().isString(),
   body(['bankAccount.accountHolder', 'bank_account.accountHolder']).optional().isString(),
@@ -235,6 +276,11 @@ exports.updateRefundStatusRules = [
     .isFloat({ min: 0 }),
   body('evidence').optional().isArray({ max: 6 }),
   body('evidence.*').optional().isURL(),
+  body().custom((_, { req }) => {
+    const action = String(req.body?.action || '').trim();
+    if (action !== 'customer_submit_info') return true;
+    return validateRequiredRefundBankAccount(req, { required: true });
+  }),
 ];
 
 exports.overrideRefundRules = [

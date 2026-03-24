@@ -252,6 +252,7 @@ const RefundBreakdownSchema = new mongoose.Schema(
 
 const RefundBankAccountSchema = new mongoose.Schema(
   {
+    bankCode: { type: String, default: "" },
     bankName: { type: String, default: "" },
     accountNumber: { type: String, default: "" },
     accountHolder: { type: String, default: "" },

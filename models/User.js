@@ -184,6 +184,10 @@ const pushTokenSchema = new mongoose.Schema({
 }, { _id: true });
 
 const refundAccountSchema = new mongoose.Schema({
+    bankCode: {
+        type: String,
+        default: ''
+    },
     bankName: {
         type: String,
         required: true
