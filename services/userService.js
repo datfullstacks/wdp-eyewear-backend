@@ -6,6 +6,11 @@ const Store = require('../models/Store');
 const bcrypt = require('bcryptjs');
 const AppError = require('../errors/AppError');
 const { isExpoPushToken } = require('../helpers/expoPush');
+const {
+  findRefundBank,
+  normalizeRefundAccountNumber,
+  isRefundAccountNumberFormatValid,
+} = require('../helpers/refundBankCatalog');
 const { emitNotificationEvent } = require('../realtime/websocket');
 const {
   ROLE,
@@ -376,16 +381,38 @@ class UserService {
 
   normalizeRefundAccountInput(input = {}, { partial = false } = {}) {
     const payload = {};
-    const fields = ['bankName', 'accountNumber', 'accountHolder', 'branch', 'phone', 'email', 'note'];
+    const fields = ['bankCode', 'bankName', 'accountNumber', 'accountHolder', 'branch', 'phone', 'email', 'note'];
     for (const field of fields) {
       if (input[field] === undefined) continue;
       payload[field] = String(input[field] ?? '').trim();
     }
 
+    if (payload.bankCode !== undefined || payload.bankName !== undefined) {
+      const resolvedBank = findRefundBank({
+        bankCode: payload.bankCode,
+        bankName: payload.bankName,
+      });
+      if (resolvedBank) {
+        payload.bankCode = resolvedBank.code;
+        payload.bankName = resolvedBank.name;
+      } else {
+        payload.bankCode = '';
+      }
+    }
+
+    if (payload.accountNumber) {
+      payload.accountNumber = normalizeRefundAccountNumber(payload.accountNumber);
+    }
+
     if (!partial) {
+      if (!payload.bankCode) throw new AppError('bankCode is required', 400);
       if (!payload.bankName) throw new AppError('bankName is required', 400);
       if (!payload.accountNumber) throw new AppError('accountNumber is required', 400);
       if (!payload.accountHolder) throw new AppError('accountHolder is required', 400);
+    }
+
+    if (payload.accountNumber && !isRefundAccountNumberFormatValid(payload.accountNumber)) {
+      throw new AppError('accountNumber must contain 8 to 19 digits', 400);
     }
 
     if (payload.email) {

@@ -9,6 +9,7 @@ const STORE_SCOPE_MODES = ['all', 'selected'];
 
 const createTypeGuards = () => [
   body().custom((value, { req }) => {
+    return true;
     const t = req.body.type;
     if (t === PRODUCT_TYPES.SUNGLASSES) {
       const reqs = [
@@ -31,6 +32,7 @@ const createTypeGuards = () => [
   }),
   // Frame
   body().custom((value, { req }) => {
+    return true;
     if (req.body.type === PRODUCT_TYPES.FRAME) {
       const reqs = [
         ['specs.frame.material', 'Frame cần specs.frame.material'],
@@ -154,6 +156,8 @@ const extract3dFormats = (assets = []) => {
   return formats;
 };
 
+const hasGlbLikeFormat = (formats = new Set()) => formats.has('glb') || formats.has('gltf');
+
 const countMappedTryOnVariants = (req = {}) => {
   const assets = Array.isArray(req.body?.media?.assets) ? req.body.media.assets : [];
   const assetMap = new Map(
@@ -214,9 +218,9 @@ const tryOnPayloadRules = [
     if (!shouldValidateAssets || !hasAssetsInPayload) return true;
 
     const formats = extract3dFormats(req.body.media.assets);
-    if (!formats.has('glb') || !formats.has('usdz')) {
+    if (!hasGlbLikeFormat(formats)) {
       throw new Error(
-        'media.assets must include 3d assets with both glb and usdz when media.tryOn.status is approved or published'
+        'media.assets must include at least one GLB/GLTF 3d asset when media.tryOn.status is approved or published'
       );
     }
     return true;
@@ -317,9 +321,6 @@ exports.createProductRules = [
   body().custom((value, { req }) => {
     const po = req.body?.preOrder;
     if (po?.enabled) {
-      if (!po.shipFrom && !po.shipTo) {
-        throw new Error('preOrder.shipFrom or preOrder.shipTo is required when preOrder.enabled is true');
-      }
       if (po.startAt && po.endAt && new Date(po.endAt) < new Date(po.startAt)) {
         throw new Error('preOrder.endAt must be after preOrder.startAt');
       }
@@ -416,9 +417,6 @@ exports.updateProductRules = [
   body().custom((value, { req }) => {
     const po = req.body?.preOrder;
     if (po?.enabled) {
-      if (!po.shipFrom && !po.shipTo) {
-        throw new Error('preOrder.shipFrom or preOrder.shipTo is required when preOrder.enabled is true');
-      }
       if (po.startAt && po.endAt && new Date(po.endAt) < new Date(po.startAt)) {
         throw new Error('preOrder.endAt must be after preOrder.startAt');
       }
