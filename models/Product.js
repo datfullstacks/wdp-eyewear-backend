@@ -3,6 +3,14 @@ const { PRODUCT_TYPES, PRODUCT_STATUS, TRY_ON_STATUS } = require('../constants')
 
 const { Schema } = mongoose;
 const SEASON_VALUES = ['spring', 'summer', 'autumn', 'winter', 'all_season'];
+const SHIPPING_COLLECTION_TIMING_VALUES = ['upfront', 'on_delivery'];
+
+function normalizeShippingCollectionTiming(value) {
+  if (value === undefined || value === null || value === '') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'with_balance') return 'on_delivery';
+  return SHIPPING_COLLECTION_TIMING_VALUES.includes(normalized) ? normalized : value;
+}
 
 const mediaAssetSchema = new Schema({
   assetType: { type: String, enum: ['2d', '3d'], required: true },
@@ -174,8 +182,9 @@ const productSchema = new Schema({
     allowCod: { type: Boolean, default: true },
     shippingCollectionTiming: {
       type: String,
-      enum: ["upfront", "with_balance", "on_delivery"],
+      enum: SHIPPING_COLLECTION_TIMING_VALUES,
       default: "upfront",
+      set: normalizeShippingCollectionTiming,
     },
     note: String             // FE note (e.g. "Ships in week 3/2")
   },
@@ -271,6 +280,10 @@ const slugify = (value = '') => value
 productSchema.pre('validate', function () {
   if (!this.slug && this.name) {
     this.slug = slugify(this.name);
+  }
+
+  if (this.preOrder?.shippingCollectionTiming === 'with_balance') {
+    this.preOrder.shippingCollectionTiming = 'on_delivery';
   }
 });
 

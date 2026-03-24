@@ -2,7 +2,7 @@
 const { body, query } = require('express-validator');
 const { PRODUCT_TYPES, PRODUCT_STATUS, ACCESSORY_CATEGORIES, TRY_ON_STATUS } = require('../constants');
 const SEASONS = ['spring', 'summer', 'autumn', 'winter', 'all_season'];
-const PREORDER_SHIPPING_COLLECTION_TIMINGS = ['upfront', 'with_balance', 'on_delivery'];
+const PREORDER_SHIPPING_COLLECTION_TIMINGS = ['upfront', 'on_delivery'];
 const MAX_TRY_ON_MODELS = 8;
 const MAX_TRY_ON_ASSET_IDS = MAX_TRY_ON_MODELS * 2;
 const STORE_SCOPE_MODES = ['all', 'selected'];

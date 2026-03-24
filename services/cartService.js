@@ -6,7 +6,7 @@ const CART_TYPES = {
   READY_STOCK: 'ready_stock',
   PRE_ORDER: 'pre_order'
 };
-const SHIPPING_COLLECTION_TIMINGS = new Set(['upfront', 'with_balance', 'on_delivery']);
+const SHIPPING_COLLECTION_TIMINGS = new Set(['upfront', 'on_delivery']);
 
 const PRESCRIPTION_MODES = new Set(['none', 'manual', 'upload']);
 
@@ -110,6 +110,7 @@ function pickPrice(product, variant) {
 
 function normalizeShippingCollectionTiming(value, fallback = 'upfront') {
   const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'with_balance') return 'on_delivery';
   return SHIPPING_COLLECTION_TIMINGS.has(normalized) ? normalized : fallback;
 }
 
