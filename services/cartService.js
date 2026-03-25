@@ -1,6 +1,10 @@
 const Cart = require('../models/Cart');
 const Product = require('../models/Product');
 const AppError = require('../errors/AppError');
+const {
+  getEffectiveSystemConfig,
+  resolvePreOrderRuntimeConfig,
+} = require('../helpers/systemConfig');
 
 const CART_TYPES = {
   READY_STOCK: 'ready_stock',
@@ -144,7 +148,7 @@ async function getOrCreateCart(userId, cartType) {
   return cart;
 }
 
-async function validateCartItemInput(input, cartType) {
+async function validateCartItemInput(input, cartType, systemConfig) {
   const productId = input?.productId || input?.product_id;
   if (!productId) throw new AppError('productId is required', 400);
   const quantity = normalizePositiveInteger(input.quantity, 'quantity');
@@ -156,7 +160,17 @@ async function validateCartItemInput(input, cartType) {
   if (product.status !== 'active') throw new AppError(`Product "${product.name}" is not available`, 400);
 
   const variant = pickVariant(product, input.variantId || input.variant_id);
-  const isPreOrder = Boolean(product?.preOrder?.enabled);
+  const productMarkedPreOrder = Boolean(product?.preOrder?.enabled);
+  const effectivePreOrderConfig = resolvePreOrderRuntimeConfig(
+    product?.preOrder || {},
+    systemConfig,
+  );
+  const isPreOrder = effectivePreOrderConfig.enabled;
+
+  if (productMarkedPreOrder && !isPreOrder) {
+    throw new AppError('Pre-order is currently disabled.', 400, 'PREORDER_DISABLED');
+  }
+
   if (cartType === CART_TYPES.PRE_ORDER && !isPreOrder) {
     throw new AppError(`"${product.name}" is not pre-order`, 400);
   }
@@ -182,11 +196,13 @@ async function validateCartItemInput(input, cartType) {
     variant,
     quantity,
     preOrder: isPreOrder,
+    effectivePreOrderConfig,
     customization: normalizeCustomization(input, variant)
   };
 }
 
 async function buildCartResponse(cartDoc) {
+  const systemConfig = await getEffectiveSystemConfig();
   const cart = await Cart.findById(cartDoc._id).populate({
     path: 'items.productId',
     select: '_id name type pricing variants preOrder'
@@ -199,12 +215,18 @@ async function buildCartResponse(cartDoc) {
     const variant = variants.find((v) => String(v._id) === String(item.variantId || ''));
     const unitPrice = pickPrice(product, variant);
     const lineTotal = unitPrice * Number(item.quantity || 0);
+    const effectivePreOrderConfig = resolvePreOrderRuntimeConfig(
+      product?.preOrder || {},
+      systemConfig,
+    );
     const depositPercent = Boolean(item.preOrder)
-      ? Number(product?.preOrder?.depositPercent ?? 100)
+      ? Number(effectivePreOrderConfig.depositPercent ?? 100)
       : 100;
     const paySplit = calcPaySplit(lineTotal, depositPercent);
     const shippingCollectionTiming = Boolean(item.preOrder)
-      ? normalizeShippingCollectionTiming(product?.preOrder?.shippingCollectionTiming)
+      ? normalizeShippingCollectionTiming(
+          effectivePreOrderConfig.shippingCollectionTiming,
+        )
       : 'upfront';
     return {
       _id: item._id,
@@ -220,8 +242,8 @@ async function buildCartResponse(cartDoc) {
       payNow: paySplit.payNow,
       payLater: paySplit.payLater,
       preOrderConfig: {
-        enabled: Boolean(item.preOrder),
-        allowCod: Boolean(product?.preOrder?.allowCod ?? true),
+        enabled: Boolean(item.preOrder) && Boolean(effectivePreOrderConfig.enabled),
+        allowCod: Boolean(effectivePreOrderConfig.allowCod),
         depositPercent,
         shippingCollectionTiming,
       },
@@ -256,7 +278,8 @@ class CartService {
   async upsertItem(userId, cartTypeInput, itemInput) {
     const cartType = normalizeCartType(cartTypeInput);
     const cart = await getOrCreateCart(userId, cartType);
-    const validated = await validateCartItemInput(itemInput, cartType);
+    const systemConfig = await getEffectiveSystemConfig();
+    const validated = await validateCartItemInput(itemInput, cartType, systemConfig);
 
     const itemId = itemInput?.itemId || itemInput?.item_id || null;
     const items = Array.isArray(cart.items) ? cart.items : [];
@@ -301,8 +324,9 @@ class CartService {
 
     const cart = await getOrCreateCart(userId, cartType);
     const nextItems = [];
+    const systemConfig = await getEffectiveSystemConfig();
     for (const itemInput of itemsInput) {
-      const validated = await validateCartItemInput(itemInput, cartType);
+      const validated = await validateCartItemInput(itemInput, cartType, systemConfig);
       nextItems.push({
         productId: validated.product._id,
         variantId: validated.variant?._id || null,

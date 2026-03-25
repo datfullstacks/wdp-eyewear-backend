@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const User = require("../models/User");
+const { getEffectiveSystemConfig } = require("./systemConfig");
 const { sendExpoPushMessages } = require("./expoPush");
 const { emitNotificationEvent } = require("../realtime/websocket");
 
@@ -34,6 +35,11 @@ async function appendUserNotification(
       },
     },
   );
+
+  const systemConfig = await getEffectiveSystemConfig();
+  if (systemConfig?.notifications?.pushEnabled === false) {
+    return;
+  }
 
   emitNotificationEvent({
     action: "created",

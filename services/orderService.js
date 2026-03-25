@@ -3,7 +3,6 @@ const Order = require("../models/Order");
 const Store = require("../models/Store");
 const User = require("../models/User");
 const Invoice = require("../models/Invoice");
-const { SystemConfig } = require("../models/SystemConfig");
 const AppError = require("../errors/AppError");
 const {
   PAYMENT_METHODS,
@@ -46,6 +45,11 @@ const {
   hasCommittedInventory,
   restoreOrderInventory,
 } = require("../helpers/orderInventory");
+const {
+  getEffectiveSystemConfig,
+  canUseGhn,
+  resolvePreOrderRuntimeConfig,
+} = require("../helpers/systemConfig");
 const promotionService = require("./promotionService");
 const promotionRedemptionService = require("./promotionRedemptionService");
 const shippingQuoteService = require("./shippingQuoteService");
@@ -272,6 +276,52 @@ function buildInvoiceCode(paymentCode, orderId) {
 function toTrimmedString(value, fallback = "") {
   if (value === undefined || value === null) return fallback;
   return String(value).trim();
+}
+
+function buildFeatureDisabledError(message, errorCode, statusCode = 400) {
+  return new AppError(message, statusCode, errorCode);
+}
+
+function assertPreorderRuntimeEnabled(systemConfig) {
+  if (systemConfig?.featureFlags?.preorderEnabled !== false) {
+    return;
+  }
+
+  throw buildFeatureDisabledError(
+    "Pre-order is currently disabled.",
+    "PREORDER_DISABLED",
+  );
+}
+
+function assertCodRuntimeEnabled(systemConfig) {
+  if (systemConfig?.payments?.codEnabled !== false) {
+    return;
+  }
+
+  throw buildFeatureDisabledError("COD is currently disabled.", "COD_DISABLED");
+}
+
+function assertRefundWorkflowRuntimeEnabled(systemConfig) {
+  if (systemConfig?.featureFlags?.refundWorkflowEnabled !== false) {
+    return;
+  }
+
+  throw buildFeatureDisabledError(
+    "Refund workflow is currently disabled.",
+    "REFUND_WORKFLOW_DISABLED",
+  );
+}
+
+function assertShippingRuntimeAvailable(systemConfig) {
+  if (canUseGhn(systemConfig)) {
+    return;
+  }
+
+  throw new AppError(
+    "Shipping carrier integration is currently unavailable.",
+    503,
+    "SHIPPING_UNAVAILABLE",
+  );
 }
 
 function addHours(dateValue, hours = 12) {
@@ -641,9 +691,7 @@ function shouldMarkOrderAsFullyRefunded(order, refund) {
 }
 
 async function getRefundWorkflowSettings() {
-  const config = await SystemConfig.findOne({ key: "default" })
-    .select("refunds")
-    .lean();
+  const config = await getEffectiveSystemConfig();
   const refunds = config?.refunds || {};
 
   const staffApprovalLimit = Number(refunds.staffApprovalLimit);
@@ -1520,7 +1568,7 @@ function forceItemsToCod(items = []) {
   }));
 }
 
-function buildProductShippingMeta(product) {
+function buildProductShippingMeta(product, options = {}) {
   const dimensions = product?.specs?.dimensions || {};
   const frameWidthMm = normalizeOptionalPositiveInteger(
     dimensions.frameWidthMm,
@@ -1546,12 +1594,13 @@ function buildProductShippingMeta(product) {
     ),
     widthCm: Math.max(12, Math.ceil(frameWidthMm / 10)),
     heightCm: Math.max(6, Math.ceil(lensHeightMm / 10)),
-    collectionTiming: Boolean(product?.preOrder?.enabled)
-      ? normalizeShippingCollectionTiming(
-          product?.preOrder?.shippingCollectionTiming,
-          "upfront",
-        )
-      : "upfront",
+    collectionTiming: normalizeShippingCollectionTiming(
+      options?.collectionTiming ??
+        (Boolean(product?.preOrder?.enabled)
+          ? product?.preOrder?.shippingCollectionTiming
+          : "upfront"),
+      "upfront",
+    ),
   };
 }
 
@@ -1882,6 +1931,7 @@ async function buildItems(itemsInput, options = {}) {
   }
 
   const itemDocs = [];
+  const runtimeConfig = options.runtimeConfig || null;
 
   for (const input of itemsInput) {
     const productId = input?.productId || input?.product_id;
@@ -1917,12 +1967,27 @@ async function buildItems(itemsInput, options = {}) {
       throw new AppError(`Product "${product.name}" price is missing`, 400);
     }
 
-    const isPreOrder = Boolean(product.preOrder?.enabled);
+    const productMarkedPreOrder = Boolean(product.preOrder?.enabled);
+    const effectivePreOrderConfig = resolvePreOrderRuntimeConfig(
+      product.preOrder || {},
+      runtimeConfig,
+    );
+    const isPreOrder = effectivePreOrderConfig.enabled;
+    if (productMarkedPreOrder && !isPreOrder) {
+      throw buildFeatureDisabledError(
+        "Pre-order is currently disabled.",
+        "PREORDER_DISABLED",
+      );
+    }
     assertCartTypeCompatibility(options.cartType, isPreOrder, product.name);
 
     if (isPreOrder) {
       assertPreOrderWindow(product);
-      const maxQty = Number(product.preOrder?.maxQuantityPerOrder || 0);
+      const maxQty = Number(
+        effectivePreOrderConfig.maxQuantityPerOrder ||
+          product.preOrder?.maxQuantityPerOrder ||
+          0,
+      );
       if (maxQty > 0 && quantity > maxQty) {
         throw new AppError(
           `Quantity exceeds pre-order limit for "${product.name}" (max ${maxQty})`,
@@ -1939,7 +2004,7 @@ async function buildItems(itemsInput, options = {}) {
     }
 
     const depositPercent = isPreOrder
-      ? Number(product.preOrder?.depositPercent ?? 100)
+      ? Number(effectivePreOrderConfig.depositPercent ?? 100)
       : 100;
     const { lineTotal, payNow, payLater } = calcPaySplit(
       unitPrice,
@@ -1967,7 +2032,9 @@ async function buildItems(itemsInput, options = {}) {
       payLater,
       preOrder: isPreOrder,
       customization,
-      shippingMeta: buildProductShippingMeta(product),
+      shippingMeta: buildProductShippingMeta(product, {
+        collectionTiming: effectivePreOrderConfig.shippingCollectionTiming,
+      }),
     });
   }
 
@@ -2400,6 +2467,7 @@ async function quote(
   discountAmount = 0,
   options = {},
 ) {
+  const runtimeConfig = await getEffectiveSystemConfig();
   const manualShippingFee = normalizeNonNegativeNumber(
     shippingFee,
     "shippingFee",
@@ -2413,9 +2481,14 @@ async function quote(
     currentUser: options.currentUser,
   });
 
+  if ((options.cartType || null) === CART_TYPES.PRE_ORDER) {
+    assertPreorderRuntimeEnabled(runtimeConfig);
+  }
+
   const items = await buildItems(itemsInput, {
     cartType: options.cartType || null,
     storeId: resolvedStoreId,
+    runtimeConfig,
   });
   const { subtotal } = sumAmounts(items);
   const voucherCode = normalizeVoucherCode(options.voucherCode || null);
@@ -2473,7 +2546,8 @@ async function quote(
     normalizedShippingAddress?.wardCode &&
     normalizedShippingMethod;
 
-    if (canCalculateDynamicShipping) {
+  if (canCalculateDynamicShipping && canUseGhn(runtimeConfig)) {
+    try {
       shippingQuote = await shippingQuoteService.quoteShipping({
         items,
         shippingAddress: normalizedShippingAddress,
@@ -2482,7 +2556,26 @@ async function quote(
         storeId: resolvedStoreId || null,
       });
       shippingQuote.shippingSource = "ghn";
+    } catch (error) {
+      if (runtimeConfig?.shipping?.allowEstimatedShippingFee === false) {
+        throw new AppError(
+          error?.message || "Shipping carrier integration is currently unavailable.",
+          503,
+          "SHIPPING_UNAVAILABLE",
+        );
+      }
     }
+  } else if (
+    canCalculateDynamicShipping &&
+    !canUseGhn(runtimeConfig) &&
+    runtimeConfig?.shipping?.allowEstimatedShippingFee === false
+  ) {
+    throw new AppError(
+      "Shipping carrier integration is currently unavailable.",
+      503,
+      "SHIPPING_UNAVAILABLE",
+    );
+  }
 
   const shippingFeeValue = normalizeNonNegativeNumber(
     shippingQuote.shippingFee,
@@ -2518,6 +2611,8 @@ async function quote(
   let paymentMethod = payNowMethod || payLaterMethod || requestedPaymentMethod;
 
   if (requestedPaymentMethod === PAYMENT_METHODS.COD) {
+    assertCodRuntimeEnabled(runtimeConfig);
+
     if (hasPreOrderItems) {
       throw new AppError(
         "COD is only available for ready-stock orders. Pre-order orders still require upfront payment.",
@@ -3197,6 +3292,8 @@ async function notifyCustomerRefundUpdate(order, title, message, refundStatus) {
 async function createRefundRequest(id, currentUser, payload = {}) {
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
+  const runtimeConfig = await getEffectiveSystemConfig();
+  assertRefundWorkflowRuntimeEnabled(runtimeConfig);
 
   const userId = getUserId(currentUser);
   const owner = currentUser && String(order.userId) === String(userId);
@@ -3342,6 +3439,8 @@ async function cancelOrder(id, currentUser, payload = {}) {
   );
 
   if (paidReceived) {
+    const runtimeConfig = await getEffectiveSystemConfig();
+    assertRefundWorkflowRuntimeEnabled(runtimeConfig);
     const previousRefundStatus = order.refund?.status || "none";
     const reason =
       toTrimmedString(payload.reason, "") || "Order cancelled by customer";
@@ -3464,6 +3563,8 @@ async function cancelOrder(id, currentUser, payload = {}) {
 async function updateRefundStatus(id, currentUser, payload = {}) {
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
+  const runtimeConfig = await getEffectiveSystemConfig();
+  assertRefundWorkflowRuntimeEnabled(runtimeConfig);
   const actorUserId = getUserId(currentUser);
   const isOwner =
     currentUser && String(order.userId) === String(actorUserId);
@@ -3845,11 +3946,13 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
   syncInvoiceByOrderState(invoice, order);
 
   await Promise.all([order.save(), invoice.save()]);
-  await promotionRedemptionService.syncOrderPromotionRedemption(order, {
-    releaseReason: requestedAction === REFUND_ACTIONS.COMPLETE ? "refund_completed" : "",
-    responsibility,
-    responsibilityExplicit: responsibility !== undefined,
-  });
+  if (requestedAction === REFUND_ACTIONS.COMPLETE) {
+    await promotionRedemptionService.syncOrderPromotionRedemption(order, {
+      releaseReason: "refund_completed",
+      responsibility,
+      responsibilityExplicit: responsibility !== undefined,
+    });
+  }
 
   publishStatusChange({
     domain: "order",
@@ -3905,6 +4008,8 @@ async function overrideRefund(id, currentUser, payload = {}) {
   if (!isManager(currentUser)) {
     throw new AppError("Forbidden", 403);
   }
+  const runtimeConfig = await getEffectiveSystemConfig();
+  assertRefundWorkflowRuntimeEnabled(runtimeConfig);
 
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
