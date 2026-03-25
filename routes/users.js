@@ -45,7 +45,7 @@ const {
 const {
   canReadUsersList,
   getListableUserRoles,
-  BUSINESS_MANAGER_ROLES,
+  USER_GOVERNANCE_ROLES,
 } = require('../helpers/roles');
 
 const authorizeUsersListRead = (req, res, next) => {
@@ -1211,26 +1211,26 @@ router.delete('/me/push-tokens', unregisterMyPushToken);
 
 router.post(
   '/',
-  authorize(...BUSINESS_MANAGER_ROLES),
+  authorize(...USER_GOVERNANCE_ROLES),
   createUserRules,
   validate,
   createUser
 );
 
-router.get('/stats', authorize(...BUSINESS_MANAGER_ROLES), getUserStats);
+router.get('/stats', authorizeUsersListRead, getUserStats);
 router.get('/', authorizeUsersListRead, getAllUsers);
 
 router.get('/:id', validateId, validate, getUserById);
 
 router.put(
   '/:id',
-  authorize(...BUSINESS_MANAGER_ROLES),
+  authorize(...USER_GOVERNANCE_ROLES),
   validateId,
   updateUserRules,
   validate,
   updateUser
 );
 
-router.delete('/:id', authorize(...BUSINESS_MANAGER_ROLES), validateId, validate, deleteUser);
+router.delete('/:id', authorize(...USER_GOVERNANCE_ROLES), validateId, validate, deleteUser);
 
 module.exports = router;
