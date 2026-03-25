@@ -180,6 +180,18 @@ const countMappedTryOnVariants = (req = {}) => {
 const tryOnPayloadRules = [
   body('media.tryOn.enabled').optional().isBoolean().withMessage('media.tryOn.enabled must be boolean'),
   body('media.tryOn.arUrl').optional().isString().withMessage('media.tryOn.arUrl must be a string'),
+  body('media.tryOn.glbUrl').optional().isString().withMessage('media.tryOn.glbUrl must be a string'),
+  body('media.tryOn.launchUrl').optional().isString().withMessage('media.tryOn.launchUrl must be a string'),
+  body('media.tryOn.effectPath').optional().isString().withMessage('media.tryOn.effectPath must be a string'),
+  body('media.tryOn.scene').optional().isString().withMessage('media.tryOn.scene must be a string'),
+  body('media.tryOn.resourcePaths')
+    .optional()
+    .isArray()
+    .withMessage('media.tryOn.resourcePaths must be an array'),
+  body('media.tryOn.resourcePaths.*')
+    .optional()
+    .isString()
+    .withMessage('media.tryOn.resourcePaths.* must be a string'),
   body('media.tryOn.assetIds')
     .optional()
     .isArray({ max: MAX_TRY_ON_ASSET_IDS })
@@ -197,6 +209,35 @@ const tryOnPayloadRules = [
     .isString()
     .isLength({ max: 300 })
     .withMessage('media.tryOn.rejectReason must be at most 300 characters'),
+  body('media.tryOn.prefab').optional().isObject().withMessage('media.tryOn.prefab must be an object'),
+  body('media.tryOn.prefab.rotation')
+    .optional()
+    .isString()
+    .withMessage('media.tryOn.prefab.rotation must be a string'),
+  body('media.tryOn.prefab.scale')
+    .optional()
+    .isString()
+    .withMessage('media.tryOn.prefab.scale must be a string'),
+  body('media.tryOn.prefab.translation')
+    .optional()
+    .isString()
+    .withMessage('media.tryOn.prefab.translation must be a string'),
+  body('media.tryOn.prefab.gravity')
+    .optional()
+    .isString()
+    .withMessage('media.tryOn.prefab.gravity must be a string'),
+  body('media.tryOn.prefab.cut')
+    .optional()
+    .isString()
+    .withMessage('media.tryOn.prefab.cut must be a string'),
+  body('media.tryOn.prefab.usePhysics')
+    .optional()
+    .isBoolean()
+    .withMessage('media.tryOn.prefab.usePhysics must be boolean'),
+  body('media.tryOn.prefab.colliders')
+    .optional()
+    .isArray()
+    .withMessage('media.tryOn.prefab.colliders must be an array'),
   body().custom((value, { req }) => {
     const tryOn = req.body?.media?.tryOn;
     if (!tryOn) return true;

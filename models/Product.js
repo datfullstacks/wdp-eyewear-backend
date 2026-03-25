@@ -33,6 +33,42 @@ const mediaAssetSchema = new Schema({
   }
 }, { _id: true, timestamps: false });
 
+const tryOnPrefabSchema = new Schema({
+  rotation: { type: String, trim: true },
+  scale: { type: String, trim: true },
+  translation: { type: String, trim: true },
+  gravity: { type: String, trim: true },
+  cut: { type: String, trim: true },
+  usePhysics: Boolean,
+  colliders: [{ type: Schema.Types.Mixed }]
+}, { _id: false, timestamps: false });
+
+const tryOnConfigSchema = new Schema({
+  enabled: Boolean,
+  arUrl: { type: String, trim: true },
+  glbUrl: { type: String, trim: true },
+  launchUrl: { type: String, trim: true },
+  effectPath: { type: String, trim: true },
+  scene: { type: String, trim: true },
+  resourcePaths: [{ type: String, trim: true }],
+  assetIds: [Schema.Types.ObjectId],
+  status: {
+    type: String,
+    enum: Object.values(TRY_ON_STATUS),
+    default: TRY_ON_STATUS.DRAFT
+  },
+  submittedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  submittedAt: Date,
+  approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  approvedAt: Date,
+  rejectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  rejectedAt: Date,
+  rejectReason: { type: String, trim: true },
+  publishedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  publishedAt: Date,
+  prefab: tryOnPrefabSchema
+}, { _id: false, timestamps: false });
+
 const variantSchema = new Schema({
   sku: { type: String, trim: true },
   barcode: String,
@@ -228,25 +264,7 @@ const productSchema = new Schema({
   media: {
     primaryAssetId: String,
     assets: { type: [mediaAssetSchema], default: [] },
-    tryOn: {
-      enabled: Boolean,
-      arUrl: String,
-      assetIds: [Schema.Types.ObjectId],
-      status: {
-        type: String,
-        enum: Object.values(TRY_ON_STATUS),
-        default: TRY_ON_STATUS.DRAFT
-      },
-      submittedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-      submittedAt: Date,
-      approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-      approvedAt: Date,
-      rejectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-      rejectedAt: Date,
-      rejectReason: { type: String, trim: true },
-      publishedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-      publishedAt: Date
-    }
+    tryOn: tryOnConfigSchema
   },
 
   variants: { type: [variantSchema], default: [] },

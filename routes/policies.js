@@ -1,6 +1,9 @@
 const express = require("express");
 const policyController = require("../controllers/policyController");
 const { protect, authorize } = require("../middlewares/auth");
+const {
+  enforceManagerPolicyEditorEnabled,
+} = require("../middlewares/runtimeSystemConfig");
 const { validate, validateId } = require("../middlewares/validator");
 const { POLICY_GOVERNANCE_ROLES } = require("../helpers/roles");
 const {
@@ -11,25 +14,24 @@ const {
 const router = express.Router();
 
 router.use(protect);
+router.use(authorize(...POLICY_GOVERNANCE_ROLES));
+router.use(enforceManagerPolicyEditorEnabled);
 
-router.get("/", authorize(...POLICY_GOVERNANCE_ROLES), policyController.listPolicies);
+router.get("/", policyController.listPolicies);
 router.post(
   "/",
-  authorize(...POLICY_GOVERNANCE_ROLES),
   createPolicyRules,
   validate,
   policyController.createPolicy,
 );
 router.get(
   "/:id",
-  authorize(...POLICY_GOVERNANCE_ROLES),
   validateId,
   validate,
   policyController.getPolicyById,
 );
 router.put(
   "/:id",
-  authorize(...POLICY_GOVERNANCE_ROLES),
   validateId,
   updatePolicyRules,
   validate,
@@ -37,7 +39,6 @@ router.put(
 );
 router.delete(
   "/:id",
-  authorize(...POLICY_GOVERNANCE_ROLES),
   validateId,
   validate,
   policyController.deletePolicy,
