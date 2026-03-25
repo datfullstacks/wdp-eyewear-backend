@@ -599,6 +599,45 @@ function getRefundPaidComponentTotal(breakdown) {
   );
 }
 
+function shouldAutoRefundShippingFeeOnCancellation({
+  previousStatus,
+  previousOpsStage,
+  explicitResponsibility,
+} = {}) {
+  const explicit = normalizeRefundResponsibility(explicitResponsibility);
+  if (explicit !== undefined) {
+    return ["system", "carrier", "mixed"].includes(explicit);
+  }
+
+  const normalizedStatus = toTrimmedString(previousStatus, "").toLowerCase();
+  if (normalizedStatus === ORDER_STATUS.PENDING) {
+    return true;
+  }
+
+  const normalizedStage = normalizeOpsStage(
+    previousOpsStage,
+    ORDER_OPS_STAGE.NONE,
+  );
+  return !SHIPMENT_BOUND_OPS_STAGES.has(normalizedStage);
+}
+
+function resolveCancellationRefundResponsibility({
+  explicitResponsibility,
+  owner = false,
+  refundShippingFee = false,
+} = {}) {
+  const explicit = normalizeRefundResponsibility(explicitResponsibility);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  if (refundShippingFee) {
+    return "system";
+  }
+
+  return owner ? "customer" : undefined;
+}
+
 function assertRefundBreakdownAmountBounds(order, breakdown, fieldName) {
   if (!breakdown) return;
 
@@ -3455,6 +3494,18 @@ async function cancelOrder(id, currentUser, payload = {}) {
       fromPayload ||
       normalizeRefundBankAccount(ownerUser?.refundAccount) ||
       normalizeRefundBankAccount(order.refund?.bankAccount);
+    const shouldRefundShippingFeeByDefault =
+      shouldAutoRefundShippingFeeOnCancellation({
+        previousStatus: previousOrderStatus,
+        previousOpsStage,
+        explicitResponsibility: explicitCancelResponsibility,
+      });
+    const effectiveCancelResponsibility =
+      resolveCancellationRefundResponsibility({
+        explicitResponsibility: explicitCancelResponsibility,
+        owner,
+        refundShippingFee: shouldRefundShippingFeeByDefault,
+      });
     order.refund = buildRefundRequestState(
       order,
       currentUser,
@@ -3465,12 +3516,11 @@ async function cancelOrder(id, currentUser, payload = {}) {
         requestedBreakdown: splitPaidAmountIntoRefundBreakdown(
           order,
           paidAmount,
-          true,
+          shouldRefundShippingFeeByDefault,
         ),
         bankAccount: bankAccount || undefined,
         contactChannels: channels.length > 0 ? channels : ["email"],
-        responsibility:
-          explicitCancelResponsibility || (owner ? "customer" : undefined),
+        responsibility: effectiveCancelResponsibility,
         requiresReturn: false,
       },
     );
