@@ -21,6 +21,10 @@ const {
   restoreOrderInventory,
 } = require("../helpers/orderInventory");
 const { publishStatusChange } = require("../helpers/statusEvents");
+const {
+  getEffectiveSystemConfig,
+  canUseGhn,
+} = require("../helpers/systemConfig");
 const ghnService = require("./ghnService");
 const shippingQuoteService = require("./shippingQuoteService");
 const { appendUserNotification } = require("../helpers/userNotification");
@@ -82,6 +86,19 @@ const metadataCache = {
   districts: null,
   wardsByDistrict: new Map(),
 };
+
+async function assertShippingRuntimeAvailable() {
+  const systemConfig = await getEffectiveSystemConfig();
+  if (canUseGhn(systemConfig)) {
+    return systemConfig;
+  }
+
+  throw new AppError(
+    "Shipping carrier integration is currently unavailable.",
+    503,
+    "SHIPPING_UNAVAILABLE",
+  );
+}
 
 function toTrimmedString(value, fallback = "") {
   if (value === undefined || value === null) return fallback;
@@ -1045,6 +1062,7 @@ async function syncShipmentSnapshot(
   currentUser,
   action = GHN_ACTION.SYNC_SHIPMENT,
 ) {
+  await assertShippingRuntimeAvailable();
   assertShipmentExists(order);
 
   let detailPayload;
@@ -1078,6 +1096,7 @@ async function getOrderShipping(orderId, currentUser) {
 }
 
 async function createShipment(orderId, currentUser) {
+  await assertShippingRuntimeAvailable();
   assertCanManageShipmentAction(currentUser, GHN_ACTION.CREATE_SHIPMENT);
 
   const order = await loadOrder(orderId);
@@ -1255,6 +1274,7 @@ async function createShipment(orderId, currentUser) {
 }
 
 async function syncShipment(orderId, currentUser) {
+  await assertShippingRuntimeAvailable();
   assertCanManageShipmentAction(currentUser, GHN_ACTION.SYNC_SHIPMENT);
 
   const order = await loadOrder(orderId);
@@ -1269,6 +1289,7 @@ async function syncShipment(orderId, currentUser) {
 }
 
 async function printShipmentLabel(orderId, currentUser) {
+  await assertShippingRuntimeAvailable();
   assertCanManageShipmentAction(currentUser, GHN_ACTION.PRINT_LABEL);
 
   const order = await loadOrder(orderId);
@@ -1298,6 +1319,7 @@ async function printShipmentLabel(orderId, currentUser) {
 }
 
 async function cancelShipment(orderId, currentUser) {
+  await assertShippingRuntimeAvailable();
   assertCanManageShipmentAction(currentUser, GHN_ACTION.CANCEL_SHIPMENT);
 
   const order = await loadOrder(orderId);
@@ -1332,6 +1354,7 @@ async function cancelShipment(orderId, currentUser) {
 }
 
 async function returnShipment(orderId, currentUser) {
+  await assertShippingRuntimeAvailable();
   assertCanManageShipmentAction(currentUser, GHN_ACTION.RETURN_SHIPMENT);
 
   const order = await loadOrder(orderId);
@@ -1366,6 +1389,7 @@ async function returnShipment(orderId, currentUser) {
 }
 
 async function requestDeliveryAgain(orderId, currentUser) {
+  await assertShippingRuntimeAvailable();
   assertCanManageShipmentAction(currentUser, GHN_ACTION.DELIVERY_AGAIN);
 
   const order = await loadOrder(orderId);
@@ -1400,6 +1424,7 @@ async function requestDeliveryAgain(orderId, currentUser) {
 }
 
 async function updateShipmentTestStatus(orderId, currentUser, status) {
+  await assertShippingRuntimeAvailable();
   assertCanManageShipmentAction(currentUser, GHN_ACTION.UPDATE_TEST_STATUS);
 
   if (!GHN_USE_TEST) {

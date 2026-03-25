@@ -11,6 +11,8 @@ const corsOptions = require('./config/cors');
 const { swaggerUi, swaggerDocs } = require('./config/swagger');
 const errorHandler = require('./errors/errorHandler');
 const AppError = require('./errors/AppError');
+const { hydrateOptionalUser } = require('./middlewares/auth');
+const { enforceRuntimeMaintenance } = require('./middlewares/runtimeSystemConfig');
 
 var indexRouter = require('./routes/index');
 var usersRouter = require('./routes/users');
@@ -49,6 +51,8 @@ app.use(logger('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
+app.use(hydrateOptionalUser);
+app.use(enforceRuntimeMaintenance);
 
 // Serve static files (for uploaded images)
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));

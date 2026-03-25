@@ -1,34 +1,40 @@
 const asyncHandler = require("../helpers/asyncHandler");
 const ApiResponse = require("../helpers/response");
 const { SystemConfig } = require("../models/SystemConfig");
-const { getOrCreateSystemConfig } = require("../helpers/systemConfig");
+const {
+  getOrCreateSystemConfig,
+  getRuntimeSystemConfig,
+  invalidateSystemConfigCache,
+  normalizeSystemConfigDocument,
+} = require("../helpers/systemConfig");
 const AppError = require("../errors/AppError");
 
 function toPayload(config) {
+  const normalized = normalizeSystemConfigDocument(config);
   return {
     id: String(config._id),
-    key: config.key,
-    featureFlags: config.featureFlags,
-    payments: config.payments,
-    shipping: config.shipping,
-    notifications: config.notifications,
+    key: normalized.key,
+    featureFlags: normalized.featureFlags,
+    payments: normalized.payments,
+    shipping: normalized.shipping,
+    notifications: normalized.notifications,
     refunds: {
-      staffApprovalLimit: Number(config.refunds?.staffApprovalLimit ?? 300000),
+      staffApprovalLimit: Number(normalized.refunds?.staffApprovalLimit ?? 300000),
       requiresManagerForReturn:
-        typeof config.refunds?.requiresManagerForReturn === "boolean"
-          ? config.refunds.requiresManagerForReturn
+        typeof normalized.refunds?.requiresManagerForReturn === "boolean"
+          ? normalized.refunds.requiresManagerForReturn
           : true,
       requiresManagerForShippingRefund:
-        typeof config.refunds?.requiresManagerForShippingRefund === "boolean"
-          ? config.refunds.requiresManagerForShippingRefund
+        typeof normalized.refunds?.requiresManagerForShippingRefund === "boolean"
+          ? normalized.refunds.requiresManagerForShippingRefund
           : true,
       requirePayoutProof:
-        typeof config.refunds?.requirePayoutProof === "boolean"
-          ? config.refunds.requirePayoutProof
+        typeof normalized.refunds?.requirePayoutProof === "boolean"
+          ? normalized.refunds.requirePayoutProof
           : false,
     },
-    integrations: config.integrations,
-    maintenanceMode: config.maintenanceMode,
+    integrations: normalized.integrations,
+    maintenanceMode: normalized.maintenanceMode,
     updatedAt: config.updatedAt,
     updatedBy: config.updatedBy,
   };
@@ -37,6 +43,15 @@ function toPayload(config) {
 exports.getSystemConfig = asyncHandler(async (req, res) => {
   const config = await getOrCreateSystemConfig();
   ApiResponse.success(res, toPayload(config), "System config retrieved successfully");
+});
+
+exports.getRuntimeSystemConfig = asyncHandler(async (req, res) => {
+  const runtimeConfig = await getRuntimeSystemConfig();
+  ApiResponse.success(
+    res,
+    runtimeConfig,
+    "Runtime system config retrieved successfully",
+  );
 });
 
 exports.updateSystemConfig = asyncHandler(async (req, res) => {
@@ -50,47 +65,70 @@ exports.updateSystemConfig = asyncHandler(async (req, res) => {
     throw new AppError("Request body must be a non-empty JSON object", 400);
   }
 
+  const currentConfig = normalizeSystemConfigDocument(current);
+  const nextConfigPayload = normalizeSystemConfigDocument({
+    ...currentConfig,
+    featureFlags: {
+      ...currentConfig.featureFlags,
+      ...(payload.featureFlags || {}),
+    },
+    payments: {
+      ...currentConfig.payments,
+      ...(payload.payments || {}),
+    },
+    shipping: {
+      ...currentConfig.shipping,
+      ...(payload.shipping || {}),
+    },
+    notifications: {
+      ...currentConfig.notifications,
+      ...(payload.notifications || {}),
+    },
+    refunds: {
+      ...currentConfig.refunds,
+      ...(payload.refunds || {}),
+    },
+    integrations: {
+      ...currentConfig.integrations,
+      ...(payload.integrations || {}),
+      sepay: {
+        ...currentConfig.integrations.sepay,
+        ...(payload.integrations?.sepay || {}),
+      },
+      ghn: {
+        ...currentConfig.integrations.ghn,
+        ...(payload.integrations?.ghn || {}),
+      },
+    },
+    maintenanceMode:
+      typeof payload.maintenanceMode === "boolean"
+        ? payload.maintenanceMode
+        : currentConfig.maintenanceMode,
+  });
+
   const nextConfig = await SystemConfig.findByIdAndUpdate(
     current._id,
     {
       $set: {
-        featureFlags: {
-          ...current.featureFlags?.toObject?.(),
-          ...(payload.featureFlags || {}),
-        },
-        payments: {
-          ...current.payments?.toObject?.(),
-          ...(payload.payments || {}),
-        },
-        shipping: {
-          ...current.shipping?.toObject?.(),
-          ...(payload.shipping || {}),
-        },
-        notifications: {
-          ...current.notifications?.toObject?.(),
-          ...(payload.notifications || {}),
-        },
-        refunds: {
-          ...current.refunds?.toObject?.(),
-          ...(payload.refunds || {}),
-        },
-        integrations: {
-          ...current.integrations?.toObject?.(),
-          ...(payload.integrations || {}),
-        },
-        maintenanceMode:
-          typeof payload.maintenanceMode === "boolean"
-            ? payload.maintenanceMode
-            : current.maintenanceMode,
+        key: nextConfigPayload.key,
+        featureFlags: nextConfigPayload.featureFlags,
+        payments: nextConfigPayload.payments,
+        shipping: nextConfigPayload.shipping,
+        notifications: nextConfigPayload.notifications,
+        refunds: nextConfigPayload.refunds,
+        integrations: nextConfigPayload.integrations,
+        maintenanceMode: nextConfigPayload.maintenanceMode,
         updatedBy: req.user?._id || null,
       },
     },
-    { new: true, runValidators: true },
+    { returnDocument: "after", runValidators: true },
   );
 
   if (!nextConfig) {
     throw new AppError("System config not found", 404);
   }
+
+  invalidateSystemConfigCache();
 
   ApiResponse.success(
     res,
