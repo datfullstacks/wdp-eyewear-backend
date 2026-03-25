@@ -157,6 +157,10 @@ const ORDER_POPULATE = [
     select:
       "name code type status phone email addressLine1 ward district city openingHours supportsTryOn supportsPickup isDefault",
   },
+  {
+    path: "items.productId",
+    select: "fulfillment.supplier variants._id variants.warehouseLocation",
+  },
 ];
 
 function isStaff(user) {
