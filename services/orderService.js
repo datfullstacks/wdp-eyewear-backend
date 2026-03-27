@@ -786,7 +786,7 @@ function getRefundRoutingState(nextStatus, order) {
       };
     case "approved":
       return {
-        currentOwnerRole: "operations",
+        currentOwnerRole: "sales",
         currentOwnerUserId: null,
         nextActionCode: Boolean(order?.refund?.requiresReturn)
           ? REFUND_ACTIONS.MARK_RETURN_PENDING
@@ -800,13 +800,13 @@ function getRefundRoutingState(nextStatus, order) {
       };
     case "return_received":
       return {
-        currentOwnerRole: "operations",
+        currentOwnerRole: "sales",
         currentOwnerUserId: null,
         nextActionCode: REFUND_ACTIONS.START_PROCESSING,
       };
     case "processing":
       return {
-        currentOwnerRole: "operations",
+        currentOwnerRole: "sales",
         currentOwnerUserId: null,
         nextActionCode: REFUND_ACTIONS.COMPLETE,
       };
@@ -1374,6 +1374,8 @@ function assertRefundActionPermission(currentUser, action, options = {}) {
     REFUND_ACTIONS.REJECT,
     REFUND_ACTIONS.ESCALATE,
     REFUND_ACTIONS.MARK_RETURN_PENDING,
+    REFUND_ACTIONS.START_PROCESSING,
+    REFUND_ACTIONS.COMPLETE,
   ]);
   const managerActions = new Set([
     REFUND_ACTIONS.MANAGER_APPROVE,
@@ -1384,8 +1386,6 @@ function assertRefundActionPermission(currentUser, action, options = {}) {
   const operationActions = new Set([
     REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED,
     REFUND_ACTIONS.INSPECTION_FAILED,
-    REFUND_ACTIONS.START_PROCESSING,
-    REFUND_ACTIONS.COMPLETE,
   ]);
 
   if (isStaffRole(currentUser) && staffActions.has(action)) {
@@ -3840,7 +3840,7 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
       order.refund.requiresReturn = true;
       order.refund.inspectionStatus = "pending";
       syncOrderWithOpsStage(order, ORDER_OPS_STAGE.RETURN_PENDING);
-      historyNote = decisionNote || "Return verification assigned to operations.";
+      historyNote = decisionNote || "Return verification assigned for return inspection.";
       break;
     case REFUND_ACTIONS.CONFIRM_RETURN_RECEIVED:
       order.refund.inspectionStatus = "passed";
@@ -3894,7 +3894,7 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
     case REFUND_ACTIONS.START_PROCESSING:
       order.refund.processedBy = actorUserId;
       order.refund.decisionNote = decisionNote;
-      historyNote = decisionNote || "Operations started payout processing.";
+      historyNote = decisionNote || "Sales started payout processing.";
       break;
     case REFUND_ACTIONS.COMPLETE: {
       const transactionRef = toTrimmedString(payload.transactionRef, "");
@@ -4058,13 +4058,9 @@ async function overrideRefund(id, currentUser, payload = {}) {
       order.refund.nextActionCode = REFUND_ACTIONS.MANAGER_APPROVE;
       break;
     case "reassign_operations":
-      if (
-        !["approved", "return_pending", "return_received", "processing"].includes(
-          previousRefundStatus,
-        )
-      ) {
+      if (!["return_pending"].includes(previousRefundStatus)) {
         throw new AppError(
-          "Operations can only be assigned for approved/processing refund states",
+          "Operations can only be assigned while waiting for return inspection",
           400,
         );
       }
