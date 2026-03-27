@@ -5,6 +5,7 @@ const { Schema } = mongoose;
 const POLICY_CATEGORIES = [
   "warranty",
   "return",
+  "refund",
   "shipping",
   "purchase",
   "privacy",
