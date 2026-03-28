@@ -10,6 +10,7 @@ const {
   GENERAL_SUPPORT_STATUSES,
   WARRANTY_SUPPORT_STATUSES,
   SUPPORT_TICKET_STATUSES,
+  SUPPORT_TICKET_OWNER_ROLES,
 } = require("../models/SupportTicket");
 const {
   isBusinessUser,
@@ -28,6 +29,7 @@ const {
 
 const SUPPORT_CATEGORY_SET = new Set(SUPPORT_TICKET_CATEGORIES);
 const SUPPORT_STATUS_SET = new Set(SUPPORT_TICKET_STATUSES);
+const SUPPORT_OWNER_ROLE_SET = new Set(SUPPORT_TICKET_OWNER_ROLES);
 const GENERAL_STATUS_SET = new Set(GENERAL_SUPPORT_STATUSES);
 const WARRANTY_STATUS_SET = new Set(WARRANTY_SUPPORT_STATUSES);
 const WARRANTY_ELIGIBILITY_SET = new Set([
@@ -59,6 +61,7 @@ const REFUND_STATUS_SET = new Set([
 
 const TICKET_POPULATE = [
   { path: "userId", select: "name email role" },
+  { path: "currentOwnerUserId", select: "name email role" },
   {
     path: "orderId",
     select: "paymentCode status orderType total storeId userId createdAt",
@@ -86,8 +89,248 @@ function normalizeStatus(value) {
   return SUPPORT_STATUS_SET.has(normalized) ? normalized : "";
 }
 
+function normalizeOwnerRole(value) {
+  const normalized = toTrimmedString(value, "").toLowerCase();
+  return SUPPORT_OWNER_ROLE_SET.has(normalized) ? normalized : "";
+}
+
 function isWarrantyCategory(category) {
   return normalizeCategory(category) === "warranty";
+}
+
+function buildSupportRoutingHistoryEntry({
+  fromOwnerRole = "none",
+  toOwnerRole = "none",
+  actorUserId = null,
+  note = "",
+}) {
+  return {
+    fromOwnerRole,
+    toOwnerRole,
+    actorUserId: actorUserId || null,
+    note: toTrimmedString(note, ""),
+    createdAt: new Date(),
+  };
+}
+
+function resolveTicketRoutingState(category, status, ticketUserId = null) {
+  const normalizedCategory = normalizeCategory(category);
+  const normalizedStatus = normalizeStatus(status);
+
+  if (normalizedCategory === "warranty") {
+    switch (normalizedStatus) {
+      case "requested":
+        return {
+          currentOwnerRole: "sales",
+          currentOwnerUserId: null,
+          nextActionCode: "review_warranty",
+        };
+      case "under_review":
+        return {
+          currentOwnerRole: "sales",
+          currentOwnerUserId: null,
+          nextActionCode: "decide_warranty",
+        };
+      case "approved":
+        return {
+          currentOwnerRole: "operations",
+          currentOwnerUserId: null,
+          nextActionCode: "start_service",
+        };
+      case "in_service":
+        return {
+          currentOwnerRole: "operations",
+          currentOwnerUserId: null,
+          nextActionCode: "complete_service",
+        };
+      case "rejected":
+      case "completed":
+        return {
+          currentOwnerRole: "none",
+          currentOwnerUserId: null,
+          nextActionCode: "",
+        };
+      default:
+        break;
+    }
+  }
+
+  if (["return", "refund"].includes(normalizedCategory)) {
+    switch (normalizedStatus) {
+      case "open":
+        return {
+          currentOwnerRole: "sales",
+          currentOwnerUserId: null,
+          nextActionCode: "review_ticket",
+        };
+      case "in_progress":
+        return {
+          currentOwnerRole: "sales",
+          currentOwnerUserId: null,
+          nextActionCode: "follow_up_customer",
+        };
+      case "resolved":
+        return {
+          currentOwnerRole: "sales",
+          currentOwnerUserId: null,
+          nextActionCode: "close_ticket",
+        };
+      case "closed":
+        return {
+          currentOwnerRole: "none",
+          currentOwnerUserId: null,
+          nextActionCode: "",
+        };
+      default:
+        break;
+    }
+  }
+
+  if (normalizedCategory === "prescription") {
+    return {
+      currentOwnerRole: "sales",
+      currentOwnerUserId: null,
+      nextActionCode:
+        normalizedStatus === "closed" ? "" : "follow_up_customer",
+    };
+  }
+
+  if (normalizedCategory === "general" && ticketUserId) {
+    return {
+      currentOwnerRole: "sales",
+      currentOwnerUserId: null,
+      nextActionCode: normalizedStatus === "closed" ? "" : "reply_customer",
+    };
+  }
+
+  return {
+    currentOwnerRole: "none",
+    currentOwnerUserId: null,
+    nextActionCode: "",
+  };
+}
+
+function applyTicketRoutingState(ticket, currentUser, note = "", { onCreate = false } = {}) {
+  if (!ticket) return ticket;
+
+  const actorUserId = getUserId(currentUser);
+  const previousOwnerRole = normalizeOwnerRole(ticket.currentOwnerRole) || "none";
+  const previousNextAction = toTrimmedString(ticket.nextActionCode, "");
+  const routing = resolveTicketRoutingState(
+    ticket.category,
+    ticket.status,
+    ticket.userId || null,
+  );
+
+  ticket.currentOwnerRole = routing.currentOwnerRole;
+  ticket.currentOwnerUserId = routing.currentOwnerUserId;
+  ticket.nextActionCode = routing.nextActionCode;
+
+  const shouldAppendHistory =
+    onCreate ||
+    previousOwnerRole !== routing.currentOwnerRole ||
+    previousNextAction !== routing.nextActionCode;
+
+  if (shouldAppendHistory) {
+    const history = Array.isArray(ticket.routingHistory) ? [...ticket.routingHistory] : [];
+    history.push(
+      buildSupportRoutingHistoryEntry({
+        fromOwnerRole: previousOwnerRole,
+        toOwnerRole: routing.currentOwnerRole,
+        actorUserId,
+        note,
+      }),
+    );
+    ticket.routingHistory = history;
+  }
+
+  return ticket;
+}
+
+function buildMissingOwnerClause() {
+  return {
+    $or: [
+      { currentOwnerRole: { $exists: false } },
+      { currentOwnerRole: null },
+      { currentOwnerRole: "" },
+      { currentOwnerRole: "none" },
+    ],
+  };
+}
+
+function buildOwnerRoleFilter(ownerRole, category = "") {
+  const normalizedOwnerRole = normalizeOwnerRole(ownerRole);
+  const normalizedCategory = normalizeCategory(category);
+  if (!normalizedOwnerRole) return null;
+
+  const clauses = [{ currentOwnerRole: normalizedOwnerRole }];
+  const missingOwnerClause = buildMissingOwnerClause();
+
+  if (
+    normalizedOwnerRole === "sales" &&
+    (!normalizedCategory || normalizedCategory === "warranty")
+  ) {
+    clauses.push({
+      category: "warranty",
+      status: { $in: ["requested", "under_review"] },
+      ...missingOwnerClause,
+    });
+  }
+
+  if (
+    normalizedOwnerRole === "operations" &&
+    (!normalizedCategory || normalizedCategory === "warranty")
+  ) {
+    clauses.push({
+      category: "warranty",
+      status: { $in: ["approved", "in_service"] },
+      ...missingOwnerClause,
+    });
+  }
+
+  if (
+    normalizedOwnerRole === "sales" &&
+    (!normalizedCategory || normalizedCategory === "return")
+  ) {
+    clauses.push({
+      category: "return",
+      status: { $in: ["open", "in_progress", "resolved"] },
+      ...missingOwnerClause,
+    });
+  }
+
+  if (
+    normalizedOwnerRole === "sales" &&
+    (!normalizedCategory || normalizedCategory === "refund")
+  ) {
+    clauses.push({
+      category: "refund",
+      status: { $in: ["open", "in_progress", "resolved"] },
+      ...missingOwnerClause,
+    });
+  }
+
+  return clauses.length === 1 ? clauses[0] : { $or: clauses };
+}
+
+function decorateTicketWorkflow(ticket) {
+  if (!ticket) return ticket;
+
+  const currentOwnerRole = normalizeOwnerRole(ticket.currentOwnerRole);
+  const nextActionCode = toTrimmedString(ticket.nextActionCode, "");
+  if (currentOwnerRole && nextActionCode) {
+    return ticket;
+  }
+
+  const routing = resolveTicketRoutingState(ticket.category, ticket.status, ticket.userId || null);
+  if (!currentOwnerRole) {
+    ticket.currentOwnerRole = routing.currentOwnerRole;
+  }
+  if (!nextActionCode) {
+    ticket.nextActionCode = routing.nextActionCode;
+  }
+
+  return ticket;
 }
 
 function parsePagination(options = {}) {
@@ -342,6 +585,7 @@ class SupportService {
       ? normalizeCategory(options.category)
       : "";
     const normalizedStatus = normalizeStatus(options.status);
+    const normalizedOwnerRole = normalizeOwnerRole(options.ownerRole);
     const normalizedEligibility = toTrimmedString(options.eligibility, "").toLowerCase();
     const normalizedSearch = toTrimmedString(options.q, "");
     const normalizedOrderId = toTrimmedString(
@@ -397,6 +641,16 @@ class SupportService {
       query.$or = searchConditions;
     }
 
+    if (normalizedOwnerRole) {
+      const ownerRoleFilter = buildOwnerRoleFilter(
+        normalizedOwnerRole,
+        query.category || normalizedCategory,
+      );
+      if (ownerRoleFilter) {
+        query.$and = [...(Array.isArray(query.$and) ? query.$and : []), ownerRoleFilter];
+      }
+    }
+
     const [tickets, total] = await Promise.all([
       populateTicketQuery(
         SupportTicket.find(query).sort({ lastMessageAt: -1, createdAt: -1 }),
@@ -407,7 +661,7 @@ class SupportService {
     ]);
 
     return {
-      tickets,
+      tickets: tickets.map((ticket) => decorateTicketWorkflow(ticket)),
       pagination: buildPagination(page, limit, total),
     };
   }
@@ -489,11 +743,11 @@ class SupportService {
 
     const actorUserId = getUserId(currentUser);
     if (String(ticket.userId?._id || ticket.userId) === String(actorUserId)) {
-      return ticket;
+      return decorateTicketWorkflow(ticket);
     }
 
     assertBusinessTicketAccess(ticket, currentUser);
-    return ticket;
+    return decorateTicketWorkflow(ticket);
   }
 
   async createTicket(currentUser, payload = {}) {
@@ -569,6 +823,8 @@ class SupportService {
     }
 
     const ticketUserId = order?.userId || getUserId(currentUser);
+    const routing = resolveTicketRoutingState(category, status, ticketUserId);
+    const actorUserId = getUserId(currentUser);
 
     const created = await SupportTicket.create({
       userId: ticketUserId,
@@ -580,6 +836,20 @@ class SupportService {
       orderId: order?._id || null,
       storeId: storeId || null,
       warranty,
+      currentOwnerRole: routing.currentOwnerRole,
+      currentOwnerUserId: routing.currentOwnerUserId,
+      nextActionCode: routing.nextActionCode,
+      routingHistory:
+        routing.currentOwnerRole !== "none"
+          ? [
+              buildSupportRoutingHistoryEntry({
+                fromOwnerRole: "none",
+                toOwnerRole: routing.currentOwnerRole,
+                actorUserId,
+                note: message,
+              }),
+            ]
+          : [],
       messages: [
         {
           sender,
@@ -617,6 +887,12 @@ class SupportService {
         ticket.status = "in_progress";
       }
     }
+
+    applyTicketRoutingState(
+      ticket,
+      currentUser,
+      sender === "staff" ? "Staff replied on ticket" : "Customer replied on ticket",
+    );
 
     await ticket.save();
     return this.getTicketById(ticket._id, currentUser);
@@ -670,6 +946,15 @@ class SupportService {
       }
       ticket.status = nextStatus;
     }
+
+    applyTicketRoutingState(
+      ticket,
+      currentUser,
+      toTrimmedString(
+        payload.decisionNote || payload.serviceNote || payload.note,
+        "",
+      ),
+    );
 
     ticket.lastMessageAt = new Date();
     await ticket.save();

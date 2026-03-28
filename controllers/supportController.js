@@ -12,6 +12,7 @@ exports.listTickets = asyncHandler(async (req, res) => {
     eligibility,
     q,
     orderId,
+    ownerRole,
   } = req.query;
   const result = await supportService.listTickets(req.user, {
     page,
@@ -22,6 +23,7 @@ exports.listTickets = asyncHandler(async (req, res) => {
     eligibility,
     q,
     orderId,
+    ownerRole,
   });
 
   ApiResponse.paginate(
@@ -51,7 +53,16 @@ exports.listRefundCases = asyncHandler(async (req, res) => {
 });
 
 exports.listWarrantyCases = asyncHandler(async (req, res) => {
-  const { page = 1, limit = 20, status, userId, eligibility, q, orderId } = req.query;
+  const {
+    page = 1,
+    limit = 20,
+    status,
+    userId,
+    eligibility,
+    q,
+    orderId,
+    ownerRole,
+  } = req.query;
   const result = await supportService.listWarrantyCases(req.user, {
     page,
     limit,
@@ -60,6 +71,7 @@ exports.listWarrantyCases = asyncHandler(async (req, res) => {
     eligibility,
     q,
     orderId,
+    ownerRole,
   });
 
   ApiResponse.paginate(
