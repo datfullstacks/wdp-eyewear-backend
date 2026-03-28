@@ -9,14 +9,9 @@ function toTrimmedString(value, fallback = "") {
   return String(value).trim();
 }
 
-async function appendUserNotification(
-  userId,
-  { type = "order", title, message, data = null } = {},
-) {
-  if (!userId) return;
-
+function buildNotificationRecord({ type = "order", title, message, data = null } = {}) {
   const now = new Date();
-  const notification = {
+  return {
     _id: new mongoose.Types.ObjectId(),
     type: toTrimmedString(type, "order") || "order",
     title: toTrimmedString(title) || "Order update",
@@ -26,58 +21,51 @@ async function appendUserNotification(
     createdAt: now,
     updatedAt: now,
   };
+}
 
-  await User.updateOne(
-    { _id: userId },
-    {
-      $push: {
-        notifications: notification,
-      },
-    },
-  );
-
+async function dispatchNotificationDelivery(userFilter, recipientUserIds, notification) {
   const systemConfig = await getEffectiveSystemConfig();
-  if (systemConfig?.notifications?.pushEnabled === false) {
-    return;
-  }
-
   emitNotificationEvent({
     action: "created",
     notification,
     recipients: {
-      userIds: [String(userId)],
+      userIds: recipientUserIds.map((item) => String(item)),
     },
   });
 
-  try {
-    const user = await User.findById(userId).select("pushTokens");
-    const pushTokens = Array.isArray(user?.pushTokens) ? user.pushTokens : [];
+  if (systemConfig?.notifications?.pushEnabled === false) {
+    return;
+  }
 
-    if (!pushTokens.length) {
+  try {
+    const users = await User.find(userFilter).select("pushTokens");
+    const pushPayload = {
+      type: toTrimmedString(notification.type, "order") || "order",
+      title: toTrimmedString(notification.title) || "Order update",
+      message: toTrimmedString(notification.message) || "",
+      data: notification.data ?? null,
+    };
+    const messages = users.flatMap((user) => {
+      const pushTokens = Array.isArray(user?.pushTokens) ? user.pushTokens : [];
+      return pushTokens.map((item) => ({
+        to: String(item?.token || "").trim(),
+        title: pushPayload.title,
+        body: pushPayload.message || pushPayload.title,
+        sound: "default",
+        priority: "high",
+        channelId: "default",
+        data: pushPayload,
+      }));
+    });
+
+    if (!messages.length) {
       return;
     }
 
-    const pushPayload = {
-      type: toTrimmedString(type, "order") || "order",
-      title: toTrimmedString(title) || "Order update",
-      message: toTrimmedString(message) || "",
-      data,
-    };
-
-    const messages = pushTokens.map((item) => ({
-      to: String(item?.token || "").trim(),
-      title: pushPayload.title,
-      body: pushPayload.message || pushPayload.title,
-      sound: "default",
-      priority: "high",
-      channelId: "default",
-      data: pushPayload,
-    }));
-
     const { invalidTokens } = await sendExpoPushMessages(messages);
     if (invalidTokens.length) {
-      await User.updateOne(
-        { _id: userId },
+      await User.updateMany(
+        userFilter,
         {
           $pull: {
             pushTokens: {
@@ -92,6 +80,72 @@ async function appendUserNotification(
   }
 }
 
+async function appendUserNotification(
+  userId,
+  { type = "order", title, message, data = null } = {},
+) {
+  if (!userId) return;
+
+  const notification = buildNotificationRecord({
+    type,
+    title,
+    message,
+    data,
+  });
+
+  await User.updateOne(
+    { _id: userId },
+    {
+      $push: {
+        notifications: notification,
+      },
+    },
+  );
+
+  await dispatchNotificationDelivery(
+    { _id: userId },
+    [userId],
+    notification,
+  );
+}
+
+async function broadcastUserNotification(
+  userIds = [],
+  { type = "system", title, message, data = null } = {},
+) {
+  const normalizedUserIds = Array.from(
+    new Set(
+      (Array.isArray(userIds) ? userIds : [])
+        .map((item) => String(item || "").trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (!normalizedUserIds.length) {
+    return;
+  }
+
+  const notification = buildNotificationRecord({
+    type,
+    title,
+    message,
+    data,
+  });
+
+  const userFilter = {
+    _id: { $in: normalizedUserIds },
+  };
+
+  await User.updateMany(userFilter, {
+    $push: {
+      notifications: notification,
+    },
+  });
+
+  await dispatchNotificationDelivery(userFilter, normalizedUserIds, notification);
+}
+
 module.exports = {
   appendUserNotification,
+  broadcastUserNotification,
 };

@@ -13,6 +13,14 @@ const {
 
 const router = express.Router();
 
+router.get("/public", policyController.listPublicPolicies);
+router.get(
+  "/public/:id",
+  validateId,
+  validate,
+  policyController.getPublicPolicyById,
+);
+
 router.use(protect);
 router.use(authorize(...POLICY_GOVERNANCE_ROLES));
 router.use(enforceManagerPolicyEditorEnabled);
