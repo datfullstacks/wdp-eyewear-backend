@@ -3,6 +3,7 @@ const { body, query } = require("express-validator");
 const {
   SUPPORT_TICKET_CATEGORIES,
   SUPPORT_TICKET_STATUSES,
+  SUPPORT_TICKET_OWNER_ROLES,
 } = require("../models/SupportTicket");
 
 const WARRANTY_ELIGIBILITY = ["eligible", "expired", "not_covered"];
@@ -39,6 +40,10 @@ exports.listSupportTicketRules = [
     .optional({ checkFalsy: true })
     .isMongoId()
     .withMessage("orderId must be a valid Mongo ID"),
+  query("ownerRole")
+    .optional({ checkFalsy: true })
+    .isIn(SUPPORT_TICKET_OWNER_ROLES)
+    .withMessage(`ownerRole must be one of: ${SUPPORT_TICKET_OWNER_ROLES.join(", ")}`),
 ];
 
 exports.createSupportTicketRules = [

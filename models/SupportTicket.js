@@ -22,6 +22,13 @@ const SUPPORT_TICKET_STATUSES = [
   ...GENERAL_SUPPORT_STATUSES,
   ...WARRANTY_SUPPORT_STATUSES,
 ];
+const SUPPORT_TICKET_OWNER_ROLES = [
+  'none',
+  'customer',
+  'sales',
+  'operations',
+  'manager',
+];
 
 const SupportMessageSchema = new mongoose.Schema(
   {
@@ -106,6 +113,36 @@ const WarrantyMetadataSchema = new mongoose.Schema(
   { _id: false, timestamps: false }
 );
 
+const SupportRoutingHistorySchema = new mongoose.Schema(
+  {
+    fromOwnerRole: {
+      type: String,
+      enum: SUPPORT_TICKET_OWNER_ROLES,
+      default: 'none',
+    },
+    toOwnerRole: {
+      type: String,
+      enum: SUPPORT_TICKET_OWNER_ROLES,
+      default: 'none',
+    },
+    actorUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    note: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: true, timestamps: false }
+);
+
 const SupportTicketSchema = new mongoose.Schema(
   {
     userId: {
@@ -151,6 +188,25 @@ const SupportTicketSchema = new mongoose.Schema(
       type: WarrantyMetadataSchema,
       default: null,
     },
+    currentOwnerRole: {
+      type: String,
+      enum: SUPPORT_TICKET_OWNER_ROLES,
+      default: 'none',
+    },
+    currentOwnerUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    nextActionCode: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    routingHistory: {
+      type: [SupportRoutingHistorySchema],
+      default: [],
+    },
     messages: {
       type: [SupportMessageSchema],
       default: []
@@ -174,4 +230,5 @@ module.exports = {
   GENERAL_SUPPORT_STATUSES,
   WARRANTY_SUPPORT_STATUSES,
   SUPPORT_TICKET_STATUSES,
+  SUPPORT_TICKET_OWNER_ROLES,
 };

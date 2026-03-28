@@ -1438,7 +1438,13 @@ function assertRefundActionTransition(currentStatus, action, requiresReturn) {
   const transitionMatrix = {
     [REFUND_ACTIONS.START_REVIEW]: ["requested", "waiting_customer_info"],
     [REFUND_ACTIONS.CUSTOMER_SUBMIT_INFO]: ["waiting_customer_info"],
-    [REFUND_ACTIONS.REQUEST_CUSTOMER_INFO]: ["requested", "reviewing"],
+    [REFUND_ACTIONS.REQUEST_CUSTOMER_INFO]: [
+      "requested",
+      "reviewing",
+      "approved",
+      "return_received",
+      "processing",
+    ],
     [REFUND_ACTIONS.APPROVE]: ["requested", "reviewing"],
     [REFUND_ACTIONS.REJECT]: ["requested", "reviewing", "waiting_customer_info"],
     [REFUND_ACTIONS.ESCALATE]: ["requested", "reviewing"],
@@ -2338,6 +2344,23 @@ function normalizeRefundBankAccount(bankAccount, options = {}) {
     accountHolder,
     note: toTrimmedString(bankAccount.note, ""),
   };
+}
+
+function requireRefundPayoutBankAccount(order) {
+  try {
+    return normalizeRefundBankAccount(order?.refund?.bankAccount, {
+      required: true,
+      fieldName: "refund.bankAccount",
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw new AppError(
+        "Customer refund bank account is required before payout processing can continue",
+        400,
+      );
+    }
+    throw error;
+  }
 }
 
 function syncInvoiceByOrderState(invoice, order, transactionId) {
@@ -4035,11 +4058,13 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
       break;
     }
     case REFUND_ACTIONS.START_PROCESSING:
+      order.refund.bankAccount = requireRefundPayoutBankAccount(order);
       order.refund.processedBy = actorUserId;
       order.refund.decisionNote = decisionNote;
       historyNote = decisionNote || "Sales started payout processing.";
       break;
     case REFUND_ACTIONS.COMPLETE: {
+      order.refund.bankAccount = requireRefundPayoutBankAccount(order);
       const transactionRef = toTrimmedString(payload.transactionRef, "");
       if (!transactionRef) {
         throw new AppError("transactionRef is required when completing payout", 400);
