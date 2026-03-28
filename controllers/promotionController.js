@@ -21,6 +21,14 @@ function toPromotionPayload(promotion, usageSummary = null) {
     usageSummary?.usedCount !== undefined
       ? Number(usageSummary.usedCount)
       : Number(promotion.usedCount || 0);
+  const reservedCount =
+    usageSummary?.reservedCount !== undefined
+      ? Number(usageSummary.reservedCount)
+      : 0;
+  const activeCount =
+    usageSummary?.activeCount !== undefined
+      ? Number(usageSummary.activeCount)
+      : usedCount + reservedCount;
 
   return {
     id: String(promotion._id),
@@ -34,9 +42,10 @@ function toPromotionPayload(promotion, usageSummary = null) {
     startDate: promotion.startsAt,
     endDate: promotion.endsAt,
     usageLimit: Number(promotion.usageLimit || 0),
-    usageCount: usedCount,
+    usageCount: activeCount,
     usedCount,
-    reservedCount: Number(usageSummary?.reservedCount || 0),
+    reservedCount,
+    activeCount,
     remainingCount:
       usageSummary?.remainingCount !== undefined ? usageSummary.remainingCount : null,
     applicableCategories: Array.isArray(promotion.applicableCategories)

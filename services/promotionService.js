@@ -188,6 +188,16 @@ async function resolvePromotion({
 
 function toPromotionMeta(promotion, usageSummary = null) {
   if (!promotion) return null;
+  const reservedCount = Number(usageSummary?.reservedCount || 0);
+  const usedCount =
+    usageSummary?.usedCount !== undefined
+      ? Number(usageSummary.usedCount)
+      : Number(promotion.usedCount || 0);
+  const activeCount =
+    usageSummary?.activeCount !== undefined
+      ? Number(usageSummary.activeCount)
+      : reservedCount + usedCount;
+
   return {
     id: String(promotion._id),
     code: promotion.code,
@@ -199,11 +209,9 @@ function toPromotionMeta(promotion, usageSummary = null) {
     cartType: promotion.cartType || 'all',
     paymentScope: promotion.paymentScope || 'all',
     applicableCategories: normalizeCategories(promotion.applicableCategories),
-    reservedCount: Number(usageSummary?.reservedCount || 0),
-    usedCount:
-      usageSummary?.usedCount !== undefined
-        ? Number(usageSummary.usedCount)
-        : Number(promotion.usedCount || 0),
+    reservedCount,
+    usedCount,
+    activeCount,
     remainingCount:
       usageSummary?.remainingCount !== undefined ? usageSummary.remainingCount : null,
   };

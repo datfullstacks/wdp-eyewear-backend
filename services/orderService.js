@@ -1929,6 +1929,117 @@ function assertCartTypeCompatibility(cartType, isPreOrder, productName) {
   }
 }
 
+function findExistingOrderItemSnapshot(input = {}, existingOrderItems = []) {
+  const orderItemId = toTrimmedString(
+    input?.orderItemId || input?._orderItemId || input?.itemId,
+    "",
+  );
+  if (orderItemId) {
+    return (
+      (Array.isArray(existingOrderItems) ? existingOrderItems : []).find(
+        (item) => String(item?._id || "") === orderItemId,
+      ) || null
+    );
+  }
+
+  const productId = toTrimmedString(input?.productId || input?.product_id, "");
+  const variantId = toTrimmedString(
+    input?.variantId ?? input?.variant_id,
+    "",
+  );
+
+  return (
+    (Array.isArray(existingOrderItems) ? existingOrderItems : []).find(
+      (item) =>
+        String(item?.productId || "") === productId &&
+        String(item?.variantId || "") === variantId,
+    ) || null
+  );
+}
+
+function canReuseOrderItemSnapshot(input = {}, existingOrderItem = null) {
+  if (!existingOrderItem) return false;
+
+  const productId = toTrimmedString(input?.productId || input?.product_id, "");
+  const variantId = toTrimmedString(
+    input?.variantId ?? input?.variant_id,
+    "",
+  );
+  const quantity = Number(input?.quantity || 0);
+
+  return (
+    String(existingOrderItem?.productId || "") === productId &&
+    String(existingOrderItem?.variantId || "") === variantId &&
+    quantity === Number(existingOrderItem?.quantity || 0)
+  );
+}
+
+function buildItemDocFromOrderSnapshot(
+  input = {},
+  existingOrderItem = {},
+  product = null,
+) {
+  const quantity = normalizePositiveInteger(input.quantity, "quantity");
+  const unitPrice = normalizeNonNegativeNumber(
+    existingOrderItem?.unitPrice ?? 0,
+    "unitPrice",
+  );
+  const depositPercent = Math.max(
+    0,
+    Math.min(
+      100,
+      Number.isFinite(Number(existingOrderItem?.depositPercent))
+        ? Number(existingOrderItem.depositPercent)
+        : 100,
+    ),
+  );
+  const { lineTotal, payNow, payLater } = calcPaySplit(
+    unitPrice,
+    quantity,
+    depositPercent,
+  );
+  const variantOptions = {
+    color: toTrimmedString(existingOrderItem?.variantOptions?.color, ""),
+    size: toTrimmedString(existingOrderItem?.variantOptions?.size, ""),
+  };
+  const customization = normalizeCustomization(input, {
+    variant: { options: variantOptions },
+  });
+  const preOrder = Boolean(existingOrderItem?.preOrder);
+
+  return {
+    productId:
+      product?._id ||
+      existingOrderItem?.productId ||
+      input?.productId ||
+      input?.product_id,
+    variantId:
+      existingOrderItem?.variantId ??
+      input?.variantId ??
+      input?.variant_id ??
+      null,
+    name: toTrimmedString(existingOrderItem?.name || product?.name, ""),
+    type: toTrimmedString(existingOrderItem?.type || product?.type, ""),
+    variantOptions,
+    quantity,
+    unitPrice,
+    lineTotal,
+    depositPercent,
+    payNow,
+    payLater,
+    preOrder,
+    customization,
+    shippingMeta: buildProductShippingMeta(product || {}, {
+      collectionTiming: preOrder
+        ? normalizeShippingCollectionTiming(
+            product?.preOrder?.shippingCollectionTiming,
+            "upfront",
+          )
+        : "upfront",
+    }),
+  };
+}
+
 async function buildItems(itemsInput, options = {}) {
   if (!Array.isArray(itemsInput) || itemsInput.length === 0) {
     throw new AppError("items is required", 400);
@@ -1944,9 +2055,29 @@ async function buildItems(itemsInput, options = {}) {
     }
 
     const quantity = normalizePositiveInteger(input.quantity, "quantity");
+    const existingOrderItem = findExistingOrderItemSnapshot(
+      input,
+      options.existingOrderItems,
+    );
+    const reuseExistingSnapshot = canReuseOrderItemSnapshot(
+      input,
+      existingOrderItem,
+    );
     const product = await Product.findById(productId).select(
       "_id name type status pricing preOrder inventory variants specs storeScope",
     );
+    if (reuseExistingSnapshot) {
+      assertCartTypeCompatibility(
+        options.cartType,
+        Boolean(existingOrderItem?.preOrder),
+        existingOrderItem?.name || product?.name || "Product",
+      );
+      itemDocs.push(
+        buildItemDocFromOrderSnapshot(input, existingOrderItem, product),
+      );
+      continue;
+    }
+
     if (!product) {
       throw new AppError("Product not found", 404);
     }
@@ -2059,6 +2190,8 @@ function normalizeVoucherCode(value) {
 
 function mapOrderItemsToInput(items = []) {
   return (Array.isArray(items) ? items : []).map((item) => ({
+    orderItemId: item._id || null,
+    _orderItemId: item._id || null,
     productId: item.productId,
     variantId: item.variantId || null,
     quantity: item.quantity,
@@ -2493,6 +2626,7 @@ async function quote(
     cartType: options.cartType || null,
     storeId: resolvedStoreId,
     runtimeConfig,
+    existingOrderItems: options.existingOrderItems,
   });
   const { subtotal } = sumAmounts(items);
   const voucherCode = normalizeVoucherCode(options.voucherCode || null);
@@ -2910,6 +3044,7 @@ async function updateOrderItems(id, currentUser, payload = {}) {
     shippingMethod: nextShippingMethod,
     shippingAddress: nextShippingAddress,
     orderId: order._id,
+    existingOrderItems: order.items,
     storeId: order.storeId || null,
     currentUser,
   });
@@ -3114,6 +3249,7 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
     shippingMethod: order.shippingMethod || "standard",
     shippingAddress: order.shippingAddress || null,
     orderId: order._id,
+    existingOrderItems: order.items,
     storeId: order.storeId || null,
     currentUser,
   });
@@ -3350,7 +3486,7 @@ async function createRefundRequest(id, currentUser, payload = {}) {
   const previousRefundStatus = order.refund?.status || "none";
 
   order.refund = buildRefundRequestState(order, currentUser, payload, {
-    defaultAmount: baseBreakdown.itemAmount,
+    requestedBreakdown: baseBreakdown,
     bankAccount: requestedBankAccount,
     note: payload.note,
     requiresReturn: false,
