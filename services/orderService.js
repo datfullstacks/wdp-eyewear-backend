@@ -3463,13 +3463,15 @@ async function createRefundRequest(id, currentUser, payload = {}) {
     owner &&
     ![
       ORDER_STATUS.PENDING,
+      ORDER_STATUS.CONFIRMED,
+      ORDER_STATUS.PROCESSING,
       ORDER_STATUS.CANCELLED,
       ORDER_STATUS.DELIVERED,
       ORDER_STATUS.RETURNED,
     ].includes(order.status)
   ) {
     throw new AppError(
-      "Refund request is only available for paid pending-confirmation, cancelled, delivered, or returned orders",
+      "Refund request is only available for paid pending, confirmed, processing, cancelled, delivered, or returned orders",
       400,
     );
   }
@@ -3595,6 +3597,12 @@ async function cancelOrder(id, currentUser, payload = {}) {
       fromPayload ||
       normalizeRefundBankAccount(ownerUser?.refundAccount) ||
       normalizeRefundBankAccount(order.refund?.bankAccount);
+    const autoRefundResponsibility =
+      explicitCancelResponsibility || (owner ? "customer" : undefined);
+    const includeShippingFeeInAutoRefund =
+      autoRefundResponsibility === undefined
+        ? !owner
+        : ["system", "carrier", "mixed"].includes(autoRefundResponsibility);
     order.refund = buildRefundRequestState(
       order,
       currentUser,
@@ -3605,12 +3613,11 @@ async function cancelOrder(id, currentUser, payload = {}) {
         requestedBreakdown: splitPaidAmountIntoRefundBreakdown(
           order,
           paidAmount,
-          true,
+          includeShippingFeeInAutoRefund,
         ),
         bankAccount: bankAccount || undefined,
         contactChannels: channels.length > 0 ? channels : ["email"],
-        responsibility:
-          explicitCancelResponsibility || (owner ? "customer" : undefined),
+        responsibility: autoRefundResponsibility,
         requiresReturn: false,
       },
     );
