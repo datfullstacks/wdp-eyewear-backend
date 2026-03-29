@@ -235,6 +235,48 @@ class ProductService {
     payload.storeScope = await this.normalizeStoreScope(payload.storeScope);
   }
 
+  enforceOperationManagedInventoryOnCreate(payload) {
+    if (!Array.isArray(payload?.variants)) return;
+
+    payload.variants = payload.variants.map((variant) => {
+      if (!isPlainObject(variant)) return variant;
+      return {
+        ...variant,
+        stock: 0,
+      };
+    });
+  }
+
+  enforceOperationManagedInventoryOnUpdate(payload, existingProduct) {
+    if (!Array.isArray(payload?.variants)) return;
+
+    const existingStockById = new Map(
+      (Array.isArray(existingProduct?.variants) ? existingProduct.variants : [])
+        .filter((variant) => variant?._id)
+        .map((variant) => {
+          const stock = Number(variant?.stock);
+          return [
+            String(variant._id),
+            Number.isFinite(stock) && stock >= 0 ? stock : 0,
+          ];
+        })
+    );
+
+    payload.variants = payload.variants.map((variant) => {
+      if (!isPlainObject(variant)) return variant;
+
+      const variantId = String(variant._id || '').trim();
+      const stock = variantId && existingStockById.has(variantId)
+        ? existingStockById.get(variantId)
+        : 0;
+
+      return {
+        ...variant,
+        stock,
+      };
+    });
+  }
+
   getRole(currentUser) {
     return String(currentUser?.role || '')
       .trim()
@@ -516,6 +558,7 @@ class ProductService {
 
     await this.applyNormalizedStoreScope(payload);
     this.stripLegacyUsdzAssets(payload);
+    this.enforceOperationManagedInventoryOnCreate(payload);
     this.enforceTryOnRulesOnCreate(payload, currentUser);
 
     const product = await Product.create(payload);
@@ -659,6 +702,7 @@ class ProductService {
     }
     await this.applyNormalizedStoreScope(payload);
     this.stripLegacyUsdzAssets(payload);
+    this.enforceOperationManagedInventoryOnUpdate(payload, product);
 
     const existingSnapshot = product.toObject({ depopulate: true });
     const mergedSnapshot = deepMerge(existingSnapshot, payload);
