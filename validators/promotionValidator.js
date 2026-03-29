@@ -94,11 +94,11 @@ const basePromotionRules = [
     .isFloat({ min: 0 })
     .withMessage("value must be non-negative"),
   body(["minPurchase", "minOrderValue"])
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .isFloat({ min: 0 })
     .withMessage("minPurchase must be non-negative"),
   body("maxDiscount")
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .isFloat({ min: 0 })
     .withMessage("maxDiscount must be non-negative"),
   body(["startDate", "startsAt"])
@@ -110,7 +110,7 @@ const basePromotionRules = [
     .isISO8601()
     .withMessage("endDate must be a valid date"),
   body("usageLimit")
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .isInt({ min: 0 })
     .withMessage("usageLimit must be non-negative"),
   body("cartType")
