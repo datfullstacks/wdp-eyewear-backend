@@ -12,7 +12,7 @@ exports.listPreorderBatchRules = [
 
 exports.createPreorderBatchRules = [
   body('batchCode').notEmpty().withMessage('batchCode is required').isString(),
-  body('storeId').notEmpty().withMessage('storeId is required').isMongoId().withMessage('storeId must be a valid Mongo ID'),
+  body('storeId').optional({ checkFalsy: true }).isMongoId().withMessage('storeId must be a valid Mongo ID'),
   body('supplier').notEmpty().withMessage('supplier is required').isString(),
   body('orderDate').notEmpty().withMessage('orderDate is required').isISO8601(),
   body('expectedDate').optional().isISO8601(),

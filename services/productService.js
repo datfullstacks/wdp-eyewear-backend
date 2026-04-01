@@ -9,6 +9,7 @@ const {
   ORDER_TYPES,
 } = require('../constants');
 const { publishStatusChange } = require('../helpers/statusEvents');
+const { findSingleStoreId } = require('../helpers/singleStore');
 
 const TRY_ON_STATUS_VALUES = new Set(Object.values(TRY_ON_STATUS));
 const OPERATION_ROLE_ALLOWED_TRY_ON_STATUSES = new Set([
@@ -299,42 +300,15 @@ class ProductService {
   }
 
   async normalizeStoreScope(storeScopeInput = {}) {
-    if (!isPlainObject(storeScopeInput)) {
-      return { mode: 'all', primaryStoreId: undefined, storeIds: [], note: '' };
-    }
-
-    const mode = String(storeScopeInput.mode || 'all').trim().toLowerCase() === 'selected'
-      ? 'selected'
-      : 'all';
-    const primaryStoreId = String(storeScopeInput.primaryStoreId || '').trim();
-    const dedupedStoreIds = [
-      ...new Set(
-        (Array.isArray(storeScopeInput.storeIds) ? storeScopeInput.storeIds : [])
-          .map((id) => String(id || '').trim())
-          .filter(Boolean)
-      ),
-    ];
-
-    const requestedIds = [...new Set([primaryStoreId, ...dedupedStoreIds].filter(Boolean))];
-    if (requestedIds.length > 0) {
-      const stores = await Store.find({ _id: { $in: requestedIds } }).select('_id');
-      const knownIds = new Set(stores.map((store) => String(store._id)));
-      const invalidIds = requestedIds.filter((id) => !knownIds.has(id));
-      if (invalidIds.length > 0) {
-        throw new AppError('storeScope contains unknown store id(s)', 400);
-      }
-    }
-
-    const normalizedStoreIds =
-      mode === 'selected'
-        ? [...new Set([primaryStoreId, ...dedupedStoreIds].filter(Boolean))]
-        : [];
-
+    const singleStoreId = await findSingleStoreId();
+    const note = isPlainObject(storeScopeInput)
+      ? String(storeScopeInput.note || '').trim()
+      : '';
     return {
-      mode,
-      primaryStoreId: primaryStoreId || undefined,
-      storeIds: normalizedStoreIds,
-      note: String(storeScopeInput.note || '').trim(),
+      mode: 'selected',
+      primaryStoreId: singleStoreId,
+      storeIds: [singleStoreId],
+      note,
     };
   }
 

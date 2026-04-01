@@ -3,6 +3,7 @@ const Store = require('../models/Store');
 const StockReceipt = require('../models/StockReceipt');
 const AppError = require('../errors/AppError');
 const { buildStoreScopedQuery, canAccessStore } = require('../helpers/storeAccess');
+const { findSingleStoreId } = require('../helpers/singleStore');
 
 function randomDigits(length) {
   let out = '';
@@ -58,7 +59,7 @@ class InventoryService {
   async resolveStoreId(storeId, currentUser) {
     const normalizedStoreId = String(storeId || '').trim();
     if (!normalizedStoreId) {
-      throw new AppError('storeId is required', 400);
+      return findSingleStoreId();
     }
 
     if (!canAccessStore(currentUser, normalizedStoreId)) {
@@ -70,7 +71,7 @@ class InventoryService {
       throw new AppError('Store not found', 404);
     }
 
-    return normalizedStoreId;
+    return findSingleStoreId();
   }
 
   buildScopedQuery(currentUser) {

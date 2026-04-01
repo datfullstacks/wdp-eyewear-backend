@@ -11,7 +11,7 @@ exports.listReceiptRules = [
 ];
 
 exports.createReceiptRules = [
-  body('storeId').notEmpty().withMessage('storeId is required').isMongoId().withMessage('storeId must be a valid Mongo ID'),
+  body('storeId').optional({ checkFalsy: true }).isMongoId().withMessage('storeId must be a valid Mongo ID'),
   body('supplier').notEmpty().withMessage('supplier is required'),
   body('warehouseLocation').optional().isString(),
   body('receivedAt').optional().isISO8601(),

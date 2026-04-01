@@ -256,6 +256,11 @@ class StoreService {
   }
 
   async createStore(payload) {
+    const existingCount = await Store.countDocuments();
+    if (existingCount > 0) {
+      throw new AppError('Single-store mode does not allow creating additional stores', 400);
+    }
+
     const preparedPayload = await this.prepareStorePayload(payload);
     const store = await Store.create(preparedPayload);
     if (store.isDefault) {
@@ -282,6 +287,11 @@ class StoreService {
   async deleteStore(id) {
     const store = await Store.findById(id);
     if (!store) throw new AppError('Store not found', 404);
+
+    const totalStores = await Store.countDocuments();
+    if (totalStores <= 1) {
+      throw new AppError('Single-store mode requires keeping the flagship store', 400);
+    }
 
     const [hasProducts, hasUsers, hasOrders] = await Promise.all([
       Product.exists({
