@@ -109,6 +109,16 @@ exports.create = asyncHandler(async (req, res) => {
     .toLowerCase();
   const isCodOrder = selectedPaymentMethod === PAYMENT_METHODS.COD;
   const payAmount = isCodOrder ? quote.payLater : quote.payNow;
+  const hasSepayBalanceLeg =
+    !isCodOrder &&
+    String(quote.payLaterMethod || "").trim().toLowerCase() ===
+      PAYMENT_METHODS.SEPAY &&
+    Number(quote.payLater || 0) > 0;
+  const hasCodBalanceLeg =
+    !isCodOrder &&
+    String(quote.payLaterMethod || "").trim().toLowerCase() ===
+      PAYMENT_METHODS.COD &&
+    Number(quote.payLater || 0) > 0;
   const paymentContent = order.paymentCode;
   const bankAccountNumber =
     SEPAY_BANK_ACCOUNT_NUMBER || SEPAY_BANK_ACCOUNT_ID || null;
@@ -121,8 +131,16 @@ exports.create = asyncHandler(async (req, res) => {
   const paymentInstruction = isCodOrder
     ? "Khach hang thanh toan khi nhan hang (COD)."
     : payAmount > 0
-      ? "Chuyen khoan SePay va giu nguyen noi dung de he thong tu dong xac nhan"
-      : "Don hang khong co khoan thanh toan truoc. Phan con lai se thu theo COD neu co.";
+      ? hasSepayBalanceLeg
+        ? "Chuyen khoan SePay cho dot dau va giu nguyen noi dung de he thong tu dong xac nhan. Phan con lai se tiep tuc thu qua SePay truoc khi giao hang."
+        : hasCodBalanceLeg
+          ? "Chuyen khoan SePay cho phan dat coc da bao gom phi van chuyen. Phan tien hang con lai se thu qua COD khi giao hang."
+        : "Chuyen khoan SePay va giu nguyen noi dung de he thong tu dong xac nhan"
+      : hasSepayBalanceLeg
+        ? "Dot dau khong can thanh toan. Phan con lai se thu qua SePay truoc khi giao hang."
+        : hasCodBalanceLeg
+          ? "Da ghi nhan phan dat coc/phi ship. Phan tien hang con lai se thu qua COD khi giao hang."
+        : "Don hang khong co khoan thanh toan truoc. Phan con lai se thu theo COD neu co.";
 
   const paymentInstructions = {
     method: isCodOrder
@@ -168,6 +186,8 @@ exports.create = asyncHandler(async (req, res) => {
         shippingFee: quote.shippingFee,
         discountAmount: quote.discountAmount,
         total: quote.total,
+        orderType: quote.orderType,
+        allowedPaymentMethods: quote.allowedPaymentMethods,
         payNow: quote.payNow,
         payLater: quote.payLater,
         paymentMethod: quote.paymentMethod,
@@ -176,6 +196,10 @@ exports.create = asyncHandler(async (req, res) => {
         shippingFeeMode: quote.shippingFeeMode,
         shippingCollectionTiming: quote.shippingCollectionTiming,
       },
+      orderType: quote.orderType,
+      allowedPaymentMethods: quote.allowedPaymentMethods,
+      paymentMethod: quote.paymentMethod,
+      paymentStatus: order.paymentStatus,
       voucherCode: order.voucherCode || null,
     },
     "Checkout created. Proceed with Sepay payment.",

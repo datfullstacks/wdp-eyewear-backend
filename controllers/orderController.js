@@ -62,14 +62,26 @@ const buildOrderPayment = (order) => {
   const method = String(order?.paymentMethod || "").toLowerCase();
   if (!method) return null;
 
+  const payLaterMethod = String(order?.payLaterMethod || "").toLowerCase();
+  const paidAmount = Math.max(0, Number(order?.paidAmount || 0));
+  const payNowTotal = Math.max(0, Number(order?.payNowTotal || 0));
   const amount =
     method === PAYMENT_METHODS.COD
       ? Number(order?.payLaterTotal || order?.total || 0)
-      : Number(order?.payNowTotal || 0);
+      : orderService.getCurrentSepayAmountDue(order);
   const paymentCode = order?.paymentCode || null;
+  const isBalancePhase =
+    method === PAYMENT_METHODS.SEPAY &&
+    payLaterMethod === PAYMENT_METHODS.SEPAY &&
+    paidAmount >= payNowTotal &&
+    amount > 0;
+  const hasCodBalanceLeg =
+    method === PAYMENT_METHODS.SEPAY &&
+    payLaterMethod === PAYMENT_METHODS.COD &&
+    Number(order?.payLaterTotal || 0) > 0;
   const basePayload = {
     method,
-    status: order?.paymentStatus || null,
+    status: isBalancePhase ? "pending_balance" : order?.paymentStatus || null,
     amount,
     currency: "VND",
     paymentCode,
@@ -85,9 +97,18 @@ const buildOrderPayment = (order) => {
   if (amount <= 0) {
     return {
       ...basePayload,
-      description: "Khong can thanh toan truoc",
+      description:
+        payLaterMethod === PAYMENT_METHODS.SEPAY
+          ? "Da thanh toan du qua SePay"
+          : hasCodBalanceLeg
+            ? "Da thanh toan dat coc qua SePay"
+            : "Khong can thanh toan truoc",
       instruction:
-        "Don hang khong co khoan thanh toan truoc. Phan con lai se thu theo COD neu co.",
+        payLaterMethod === PAYMENT_METHODS.SEPAY
+          ? "Don hang da duoc thanh toan day du qua SePay."
+          : hasCodBalanceLeg
+            ? "Da thanh toan phan dat coc/phi ship qua SePay. Phan tien hang con lai se thu qua COD khi giao hang."
+            : "Don hang khong co khoan thanh toan truoc. Phan con lai se thu theo COD neu co.",
       qrUrl: null,
     };
   }
@@ -105,7 +126,11 @@ const buildOrderPayment = (order) => {
     bankAccountName: SEPAY_BANK_ACCOUNT_NAME || null,
     description,
     instruction:
-      "Chuyen khoan SePay va giu nguyen noi dung de he thong tu dong xac nhan",
+      isBalancePhase
+        ? "Thu phan con lai qua SePay truoc khi tao van don/giao hang. Giu nguyen noi dung de he thong tu dong xac nhan."
+        : hasCodBalanceLeg
+          ? "Chuyen khoan SePay cho phan dat coc da bao gom phi van chuyen. Phan tien hang con lai se thu qua COD khi giao hang."
+        : "Chuyen khoan SePay va giu nguyen noi dung de he thong tu dong xac nhan",
     qrUrl: buildSepayQrUrl({
       accountNumber: bankAccountNumber,
       bankName,

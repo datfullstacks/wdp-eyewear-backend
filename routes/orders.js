@@ -364,7 +364,7 @@ const {
  *       properties:
  *         status:
  *           type: string
- *           enum: [ready_to_pick, picking, transporting, delivered, returned]
+ *           enum: [ready_to_pick, picking, storing, transporting, delivering, delivery_fail, waiting_to_return, return, return_transporting, returning, delivered, return_fail, damage, lost, returned]
  *     OrderItem:
  *       type: object
  *       properties:
