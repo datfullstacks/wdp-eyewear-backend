@@ -26,6 +26,7 @@ const {
   getAccessibleStoreIds,
   isStoreScopeWithinAllowed,
 } = require('../helpers/storeAccess');
+const { findSingleStoreId } = require('../helpers/singleStore');
 
 const USER_STORE_POPULATE = [
   {
@@ -81,32 +82,24 @@ class UserService {
       };
     }
 
+    if (normalizedRole === ROLE.CUSTOMER) {
+      return {
+        mode: 'all',
+        primaryStoreId: undefined,
+        storeIds: [],
+        note: String(input?.note || '').trim(),
+      };
+    }
+
+    const singleStoreId = await findSingleStoreId();
+
     const normalized = normalizeStoreAccess(input);
-    const requestedIds = [...new Set(
-      [
-        normalized.primaryStoreId,
-        ...(Array.isArray(normalized.storeIds) ? normalized.storeIds : []),
-      ].filter(Boolean)
-    )];
-
-    if (requestedIds.length > 0) {
-      const stores = await Store.find({ _id: { $in: requestedIds } }).select('_id');
-      const knownIds = new Set(stores.map((store) => String(store._id)));
-      const invalidIds = requestedIds.filter((storeId) => !knownIds.has(String(storeId)));
-      if (invalidIds.length > 0) {
-        throw new AppError('storeAccess contains unknown store id(s)', 400);
-      }
-    }
-
-    if (normalized.mode === 'selected' && normalized.storeIds.length === 0) {
-      throw new AppError('Selected store scope requires at least one store', 400);
-    }
-
-    if (normalized.mode === 'selected' && !normalized.primaryStoreId) {
-      throw new AppError('Selected store scope requires primaryStoreId', 400);
-    }
-
-    return normalized;
+    return {
+      mode: 'selected',
+      primaryStoreId: singleStoreId,
+      storeIds: [singleStoreId],
+      note: normalized.note,
+    };
   }
 
   assertActorCanAssignStoreAccess(currentUser, targetStoreAccess, targetRole) {

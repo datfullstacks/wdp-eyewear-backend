@@ -51,6 +51,7 @@ const {
   canUseGhn,
   resolvePreOrderRuntimeConfig,
 } = require("../helpers/systemConfig");
+const { findSingleStoreId } = require("../helpers/singleStore");
 const promotionService = require("./promotionService");
 const promotionRedemptionService = require("./promotionRedemptionService");
 const shippingQuoteService = require("./shippingQuoteService");
@@ -133,6 +134,13 @@ const READY_STOCK_HOLD_REASONS = new Set([
   "manual",
   "other",
 ]);
+const PRESCRIPTION_FOLLOW_UP_STATUSES = new Set([
+  "none",
+  "needs_review",
+  "needs_customer_contact",
+  "waiting_customer_response",
+  "customer_responded",
+]);
 const READY_STOCK_ISSUE_TYPES = new Set([
   "out_of_stock",
   "wrong_sku",
@@ -208,7 +216,7 @@ function isProductAvailableAtStore(product, storeId) {
 
 async function resolveOrderStoreId({ requestedStoreId, currentUser }) {
   const normalizedRequestedStoreId = toTrimmedString(requestedStoreId, "");
-  const actorStoreIds = getAccessibleStoreIds(currentUser);
+  const singleStoreId = await findSingleStoreId();
 
   if (normalizedRequestedStoreId) {
     const exists = await Store.exists({ _id: normalizedRequestedStoreId });
@@ -222,23 +230,10 @@ async function resolveOrderStoreId({ requestedStoreId, currentUser }) {
     ) {
       throw new AppError("Forbidden", 403);
     }
-    return normalizedRequestedStoreId;
+    return singleStoreId;
   }
 
-  if (!Array.isArray(actorStoreIds)) {
-    return null;
-  }
-
-  const preferredStoreId = toTrimmedString(
-    currentUser?.storeAccess?.primaryStoreId?._id ||
-      currentUser?.storeAccess?.primaryStoreId,
-    "",
-  );
-  if (preferredStoreId && actorStoreIds.includes(preferredStoreId)) {
-    return preferredStoreId;
-  }
-
-  return actorStoreIds.length === 1 ? actorStoreIds[0] : null;
+  return singleStoreId;
 }
 
 function assertBusinessUserCanAccessOrder(order, currentUser) {
@@ -1000,6 +995,33 @@ function normalizeOpsExecutionPatch(payload = {}) {
   if (Object.prototype.hasOwnProperty.call(payload, "managerReviewReason")) {
     patch.managerReviewReason = toTrimmedString(payload.managerReviewReason);
   }
+  if (Object.prototype.hasOwnProperty.call(payload, "prescriptionFollowUpStatus")) {
+    patch.prescriptionFollowUpStatus = normalizeOptionalEnum(
+      payload.prescriptionFollowUpStatus,
+      PRESCRIPTION_FOLLOW_UP_STATUSES,
+      "prescriptionFollowUpStatus",
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, "prescriptionFollowUpNote")) {
+    patch.prescriptionFollowUpNote = toTrimmedString(
+      payload.prescriptionFollowUpNote,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(payload, "prescriptionFollowUpUpdatedAt")
+  ) {
+    patch.prescriptionFollowUpUpdatedAt = normalizeOptionalDate(
+      payload.prescriptionFollowUpUpdatedAt,
+      "prescriptionFollowUpUpdatedAt",
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(payload, "prescriptionFollowUpUpdatedBy")
+  ) {
+    patch.prescriptionFollowUpUpdatedBy = toTrimmedString(
+      payload.prescriptionFollowUpUpdatedBy,
+    );
+  }
   if (Object.prototype.hasOwnProperty.call(payload, "internalNote")) {
     patch.internalNote = toTrimmedString(payload.internalNote);
   }
@@ -1069,6 +1091,20 @@ function applyOpsExecutionPatch(order, patch) {
   }
   if (patch.managerReviewReason !== undefined) {
     opsExecution.managerReviewReason = patch.managerReviewReason;
+  }
+  if (patch.prescriptionFollowUpStatus !== undefined) {
+    opsExecution.prescriptionFollowUpStatus = patch.prescriptionFollowUpStatus;
+  }
+  if (patch.prescriptionFollowUpNote !== undefined) {
+    opsExecution.prescriptionFollowUpNote = patch.prescriptionFollowUpNote;
+  }
+  if (patch.prescriptionFollowUpUpdatedAt !== undefined) {
+    opsExecution.prescriptionFollowUpUpdatedAt =
+      patch.prescriptionFollowUpUpdatedAt;
+  }
+  if (patch.prescriptionFollowUpUpdatedBy !== undefined) {
+    opsExecution.prescriptionFollowUpUpdatedBy =
+      patch.prescriptionFollowUpUpdatedBy;
   }
   if (patch.internalNote !== undefined) {
     opsExecution.internalNote = patch.internalNote;
@@ -4872,10 +4908,19 @@ async function updateOrderOpsExecution(id, currentUser, payload) {
     "managerReviewRequestedBy",
     "managerReviewReason",
   ]);
+  const allowedPrescriptionFollowUpFields = new Set([
+    "prescriptionFollowUpStatus",
+    "prescriptionFollowUpNote",
+    "prescriptionFollowUpUpdatedAt",
+    "prescriptionFollowUpUpdatedBy",
+  ]);
   const patchKeys = Object.keys(patch);
   const staffOnlyApprovalRouting =
     isStaffRole(currentUser) &&
     patchKeys.every((key) => allowedApprovalRoutingFields.has(key));
+  const staffOnlyPrescriptionFollowUp =
+    isStaffRole(currentUser) &&
+    patchKeys.every((key) => allowedPrescriptionFollowUpFields.has(key));
   const managerOnlyApprovalRouting =
     isManager(currentUser) &&
     patchKeys.every((key) => allowedApprovalRoutingFields.has(key));
@@ -4901,9 +4946,23 @@ async function updateOrderOpsExecution(id, currentUser, payload) {
   if (
     !isOperation(currentUser) &&
     !managerOnlyApprovalRouting &&
-    !staffOnlyApprovalRouting
+    !staffOnlyApprovalRouting &&
+    !staffOnlyPrescriptionFollowUp
   ) {
     throw new AppError("Forbidden", 403);
+  }
+
+  if (
+    patchKeys.some((key) => allowedPrescriptionFollowUpFields.has(key)) &&
+    (patch.prescriptionFollowUpStatus !== undefined ||
+      patch.prescriptionFollowUpNote !== undefined)
+  ) {
+    if (patch.prescriptionFollowUpUpdatedAt === undefined) {
+      patch.prescriptionFollowUpUpdatedAt = new Date();
+    }
+    if (patch.prescriptionFollowUpUpdatedBy === undefined) {
+      patch.prescriptionFollowUpUpdatedBy = toDisplayName(currentUser, "Sale");
+    }
   }
 
   const previousUpdatedAt = order?.opsExecution?.lastUpdatedAt || null;

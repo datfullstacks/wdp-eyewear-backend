@@ -4,6 +4,7 @@ const AppError = require('../errors/AppError');
 const { PREORDER_BATCH_STATUSES, PreorderBatch } = require('../models/PreorderBatch');
 const { publishStatusChange } = require('../helpers/statusEvents');
 const { buildStoreScopedQuery, canAccessStore } = require('../helpers/storeAccess');
+const { findSingleStoreId } = require('../helpers/singleStore');
 
 const PREORDER_STATUS_SET = new Set(PREORDER_BATCH_STATUSES);
 
@@ -26,7 +27,7 @@ class PreorderService {
   async resolveStoreId(storeId, currentUser) {
     const normalizedStoreId = String(storeId || '').trim();
     if (!normalizedStoreId) {
-      throw new AppError('storeId is required', 400);
+      return findSingleStoreId();
     }
 
     if (!canAccessStore(currentUser, normalizedStoreId)) {
@@ -38,7 +39,7 @@ class PreorderService {
       throw new AppError('Store not found', 404);
     }
 
-    return normalizedStoreId;
+    return findSingleStoreId();
   }
 
   buildScopedQuery(currentUser) {

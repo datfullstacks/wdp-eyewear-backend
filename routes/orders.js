@@ -334,6 +334,16 @@ const {
  *           type: string
  *         salesHandoffNote:
  *           type: string
+ *         prescriptionFollowUpStatus:
+ *           type: string
+ *           enum: [none, needs_review, needs_customer_contact, waiting_customer_response, customer_responded]
+ *         prescriptionFollowUpNote:
+ *           type: string
+ *         prescriptionFollowUpUpdatedAt:
+ *           type: string
+ *           format: date-time
+ *         prescriptionFollowUpUpdatedBy:
+ *           type: string
  *         internalNote:
  *           type: string
  *         holdReason:

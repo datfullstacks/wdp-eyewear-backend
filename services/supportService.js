@@ -26,6 +26,7 @@ const {
   getAccessibleStoreIds,
   normalizeStoreId,
 } = require("../helpers/storeAccess");
+const { findSingleStoreId } = require("../helpers/singleStore");
 
 const SUPPORT_CATEGORY_SET = new Set(SUPPORT_TICKET_CATEGORIES);
 const SUPPORT_STATUS_SET = new Set(SUPPORT_TICKET_STATUSES);
@@ -496,7 +497,7 @@ async function findAccessibleOrder(orderId, currentUser) {
 async function resolveRequestedStoreId(storeId, currentUser) {
   const normalizedStoreId = normalizeStoreId(storeId);
   if (!normalizedStoreId) {
-    return "";
+    return findSingleStoreId();
   }
 
   const exists = await Store.exists({ _id: normalizedStoreId });
@@ -508,7 +509,7 @@ async function resolveRequestedStoreId(storeId, currentUser) {
     throw new AppError("Forbidden", 403);
   }
 
-  return normalizedStoreId;
+  return findSingleStoreId();
 }
 
 function populateTicketQuery(query) {

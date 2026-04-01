@@ -347,6 +347,26 @@ exports.updateOrderOpsExecutionRules = [
     .optional({ nullable: true })
     .isString()
     .isLength({ max: 1000 }),
+  body('prescriptionFollowUpStatus')
+    .optional({ nullable: true })
+    .isIn([
+      'none',
+      'needs_review',
+      'needs_customer_contact',
+      'waiting_customer_response',
+      'customer_responded',
+    ]),
+  body('prescriptionFollowUpNote')
+    .optional({ nullable: true })
+    .isString()
+    .isLength({ max: 1000 }),
+  body('prescriptionFollowUpUpdatedAt')
+    .optional({ nullable: true })
+    .isISO8601(),
+  body('prescriptionFollowUpUpdatedBy')
+    .optional({ nullable: true })
+    .isString()
+    .isLength({ max: 120 }),
   body('internalNote')
     .optional({ nullable: true })
     .isString()

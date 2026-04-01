@@ -190,6 +190,20 @@ const OpsExecutionSchema = new mongoose.Schema(
     managerReviewRequestedAt: { type: Date },
     managerReviewRequestedBy: { type: String, default: "" },
     managerReviewReason: { type: String, default: "" },
+    prescriptionFollowUpStatus: {
+      type: String,
+      enum: [
+        "none",
+        "needs_review",
+        "needs_customer_contact",
+        "waiting_customer_response",
+        "customer_responded",
+      ],
+      default: "none",
+    },
+    prescriptionFollowUpNote: { type: String, default: "" },
+    prescriptionFollowUpUpdatedAt: { type: Date },
+    prescriptionFollowUpUpdatedBy: { type: String, default: "" },
     internalNote: { type: String, default: "" },
     holdReason: {
       type: String,
