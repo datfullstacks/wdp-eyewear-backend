@@ -2,7 +2,12 @@ const Product = require('../models/Product');
 const Order = require('../models/Order');
 const Store = require('../models/Store');
 const AppError = require('../errors/AppError');
-const { TRY_ON_STATUS, PRODUCT_TYPES, PRODUCT_STATUS } = require('../constants');
+const {
+  TRY_ON_STATUS,
+  PRODUCT_TYPES,
+  PRODUCT_STATUS,
+  ORDER_TYPES,
+} = require('../constants');
 const { publishStatusChange } = require('../helpers/statusEvents');
 
 const TRY_ON_STATUS_VALUES = new Set(Object.values(TRY_ON_STATUS));
@@ -150,6 +155,109 @@ const managedTryOnAuditFields = [
 ];
 
 class ProductService {
+  normalizeWorkflowFamily(value, fallback = ORDER_TYPES.READY_STOCK) {
+    const normalized = String(value || '').trim().toLowerCase();
+    return Object.values(ORDER_TYPES).includes(normalized) ? normalized : fallback;
+  }
+
+  async resolveBundleWorkflowFamily(product, seenIds = new Set()) {
+    const bundleItems = Array.isArray(product?.specs?.bundle?.items)
+      ? product.specs.bundle.items
+      : [];
+    if (bundleItems.length === 0) {
+      throw new AppError('Bundle must include at least one bundled product', 400);
+    }
+
+    const currentProductId = String(product?._id || '').trim();
+    const nextSeenIds = new Set(seenIds);
+    if (currentProductId) {
+      nextSeenIds.add(currentProductId);
+    }
+
+    const productIds = [
+      ...new Set(
+        bundleItems
+          .map((item) => String(item?.productId || '').trim())
+          .filter(Boolean)
+      ),
+    ];
+    const componentProducts = await Product.find({
+      _id: { $in: productIds },
+    }).select('_id name type status preOrder specs.bundle');
+    const componentMap = new Map(
+      componentProducts.map((component) => [String(component._id), component])
+    );
+    const families = new Set();
+
+    for (const bundleItem of bundleItems) {
+      const componentId = String(bundleItem?.productId || '').trim();
+      if (!componentId) {
+        throw new AppError('Bundle item productId is required', 400);
+      }
+      if (nextSeenIds.has(componentId)) {
+        throw new AppError('Nested bundle recursion is not allowed', 400);
+      }
+
+      const component = componentMap.get(componentId);
+      if (!component) {
+        throw new AppError('Bundle references an unknown product', 400);
+      }
+      if (component.status !== PRODUCT_STATUS.ACTIVE) {
+        throw new AppError(
+          `Bundle cannot include inactive product "${component.name}"`,
+          400
+        );
+      }
+
+      families.add(await this.resolveWorkflowFamilyForProduct(component, nextSeenIds));
+    }
+
+    if (families.size !== 1) {
+      throw new AppError('Bundle mixed workflow is not supported in V1', 400);
+    }
+
+    const family = this.normalizeWorkflowFamily([...families][0]);
+    const bundleIsPreOrder = Boolean(product?.preOrder?.enabled);
+    if (bundleIsPreOrder && family !== ORDER_TYPES.PRE_ORDER) {
+      throw new AppError('Pre-order bundle can only include pre-order products', 400);
+    }
+    if (!bundleIsPreOrder && family === ORDER_TYPES.PRE_ORDER) {
+      throw new AppError('Bundle containing pre-order products must also be pre-order', 400);
+    }
+    if (bundleIsPreOrder && family === ORDER_TYPES.PRESCRIPTION) {
+      throw new AppError('Prescription bundle cannot be combined with pre-order in V1', 400);
+    }
+
+    return bundleIsPreOrder ? ORDER_TYPES.PRE_ORDER : family;
+  }
+
+  async resolveWorkflowFamilyForProduct(product, seenIds = new Set()) {
+    const type = String(product?.type || '').trim().toLowerCase();
+    if ([PRODUCT_TYPES.SERVICE, PRODUCT_TYPES.GIFT_CARD].includes(type)) {
+      throw new AppError(`Bundle cannot include product type "${type}" in V1`, 400);
+    }
+    if (type === PRODUCT_TYPES.BUNDLE) {
+      return this.resolveBundleWorkflowFamily(product, seenIds);
+    }
+    if (type === PRODUCT_TYPES.LENS) {
+      if (Boolean(product?.preOrder?.enabled)) {
+        throw new AppError('Lens bundle items cannot be pre-order in V1', 400);
+      }
+      return ORDER_TYPES.PRESCRIPTION;
+    }
+    return Boolean(product?.preOrder?.enabled)
+      ? ORDER_TYPES.PRE_ORDER
+      : ORDER_TYPES.READY_STOCK;
+  }
+
+  async assertBundleWorkflowCompatibility(payload) {
+    if (String(payload?.type || '').trim().toLowerCase() !== PRODUCT_TYPES.BUNDLE) {
+      return;
+    }
+
+    await this.resolveBundleWorkflowFamily(payload, new Set());
+  }
+
   stripLegacyUsdzAssets(payload) {
     if (!isPlainObject(payload?.media)) return;
 
@@ -557,6 +665,7 @@ class ProductService {
     }
 
     await this.applyNormalizedStoreScope(payload);
+    await this.assertBundleWorkflowCompatibility(payload);
     this.stripLegacyUsdzAssets(payload);
     this.enforceOperationManagedInventoryOnCreate(payload);
     this.enforceTryOnRulesOnCreate(payload, currentUser);
@@ -706,6 +815,7 @@ class ProductService {
 
     const existingSnapshot = product.toObject({ depopulate: true });
     const mergedSnapshot = deepMerge(existingSnapshot, payload);
+    await this.assertBundleWorkflowCompatibility(mergedSnapshot);
     this.enforceTryOnRulesOnUpdate(payload, product, mergedSnapshot, currentUser);
 
     product.set(payload);

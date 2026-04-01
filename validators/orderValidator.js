@@ -381,8 +381,24 @@ exports.updateOrderOpsExecutionRules = [
 exports.updateShipmentTestStatusRules = [
   body('status')
     .notEmpty()
-    .isIn(['ready_to_pick', 'picking', 'transporting', 'delivered', 'returned'])
+    .isIn([
+      'ready_to_pick',
+      'picking',
+      'storing',
+      'transporting',
+      'delivering',
+      'delivery_fail',
+      'waiting_to_return',
+      'return',
+      'return_transporting',
+      'returning',
+      'delivered',
+      'return_fail',
+      'damage',
+      'lost',
+      'returned',
+    ])
     .withMessage(
-      'status must be one of: ready_to_pick, picking, transporting, delivered, returned'
+      'status must be one of: ready_to_pick, picking, storing, transporting, delivering, delivery_fail, waiting_to_return, return, return_transporting, returning, delivered, return_fail, damage, lost, returned'
     )
 ];

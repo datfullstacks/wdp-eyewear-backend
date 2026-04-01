@@ -315,7 +315,7 @@ const OrderSchema = new mongoose.Schema(
     payLaterTotal: { type: Number, required: true, min: 0 },
     payLaterMethod: {
       type: String,
-      enum: [PAYMENT_METHODS.COD, "", null],
+      enum: [PAYMENT_METHODS.COD, PAYMENT_METHODS.SEPAY, "", null],
       default: null,
     },
     paymentMethod: {
