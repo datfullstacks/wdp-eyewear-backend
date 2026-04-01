@@ -48,6 +48,10 @@ function hasCommittedInventory(order) {
   );
 }
 
+function hasInventoryEverBeenCommitted(order) {
+  return Boolean(order?.inventoryCommit?.committedAt);
+}
+
 function ensureInventoryCommitState(order) {
   if (!order.inventoryCommit || typeof order.inventoryCommit !== "object") {
     order.inventoryCommit = {};
@@ -168,7 +172,11 @@ async function applyInventoryIncrements(adjustments, direction) {
 }
 
 async function commitOrderInventory(order, actorId = null) {
-  if (!shouldCommitInventory(order) || hasCommittedInventory(order)) {
+  if (
+    !shouldCommitInventory(order) ||
+    hasCommittedInventory(order) ||
+    hasInventoryEverBeenCommitted(order)
+  ) {
     return false;
   }
 

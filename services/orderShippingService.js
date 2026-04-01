@@ -27,6 +27,11 @@ const {
 } = require("../helpers/systemConfig");
 const ghnService = require("./ghnService");
 const shippingQuoteService = require("./shippingQuoteService");
+const promotionRedemptionService = require("./promotionRedemptionService");
+const {
+  getCurrentSepayAmountDue,
+  hasOutstandingSepayBalance,
+} = require("./orderService");
 const { appendUserNotification } = require("../helpers/userNotification");
 const { GHN_USE_TEST } = require("../config/ghn");
 
@@ -76,10 +81,21 @@ const GHN_CANCELLED_STATUSES = new Set(["cancel", "cancelled"]);
 const GHN_TEST_WEBHOOK_STATUSES = new Set([
   "ready_to_pick",
   "picking",
+  "storing",
   "transporting",
+  "delivering",
+  "delivery_fail",
+  "waiting_to_return",
+  "return",
+  "return_transporting",
+  "returning",
   "delivered",
+  "return_fail",
+  "damage",
+  "lost",
   "returned",
 ]);
+const INACTIVE_REFUND_STATUSES = new Set(["none", "completed", "rejected"]);
 
 const metadataCache = {
   provinces: null,
@@ -133,6 +149,18 @@ function normalizePositiveInteger(value, fallback = null) {
 function normalizeStatus(value, fallback = "") {
   const normalized = toTrimmedString(value, fallback).toLowerCase();
   return normalized || fallback;
+}
+
+function normalizePaymentMethod(value, fallback = "") {
+  const normalized = normalizeStatus(value, fallback);
+  if (
+    normalized === PAYMENT_METHODS.SEPAY ||
+    normalized === PAYMENT_METHODS.COD
+  ) {
+    return normalized;
+  }
+
+  return fallback;
 }
 
 function normalizePhoneDigits(value) {
@@ -303,6 +331,236 @@ async function notifyCustomerShipmentChange(
       action,
     }),
   });
+}
+
+function getRefundNotificationPayload(order) {
+  const code = getOrderNotificationCode(order);
+  return {
+    title: "Yeu cau hoan tien da duoc mo",
+    message: `Don ${code} da duoc mo quy trinh hoan tien sau khi GHN hoan hang.`,
+  };
+}
+
+async function notifyCustomerRefundAutoOpened(order, previousRefundStatus = "") {
+  if (!order?.userId) return;
+
+  const nextRefundStatus = normalizeStatus(order?.refund?.status, "none");
+  if (nextRefundStatus === normalizeStatus(previousRefundStatus, "none")) {
+    return;
+  }
+
+  const payload = getRefundNotificationPayload(order);
+  await appendUserNotification(order.userId, {
+    type: "refund",
+    ...payload,
+    data: {
+      orderId: String(order?._id || ""),
+      orderCode: getOrderNotificationCode(order),
+      refundStatus: nextRefundStatus,
+      currentOwnerRole: normalizeStatus(order?.refund?.currentOwnerRole, "none"),
+      returnShipmentCode: toTrimmedString(order?.refund?.returnShipmentCode, ""),
+    },
+  });
+}
+
+function hasActiveRefundCase(order) {
+  const normalized = normalizeStatus(order?.refund?.status, "none");
+  return normalized && !INACTIVE_REFUND_STATUSES.has(normalized);
+}
+
+function buildReturnedShipmentRefundBreakdown(order) {
+  const paidAmount = Math.max(0, Number(order?.paidAmount || 0));
+  const shippingFee = Math.max(0, Number(order?.shippingFee || 0));
+  const paidItemAmount = Math.max(
+    0,
+    Math.min(paidAmount, Math.max(0, Number(order?.total || 0) - shippingFee)),
+  );
+  const itemAmount = paidItemAmount > 0 ? paidItemAmount : paidAmount;
+
+  return {
+    itemAmount,
+    shippingFeeAmount: 0,
+    returnShippingFeeAmount: 0,
+    total: itemAmount,
+  };
+}
+
+function appendRefundHistory(order, entry) {
+  const history = Array.isArray(order?.refund?.history)
+    ? [...order.refund.history]
+    : [];
+  history.push(entry);
+  order.refund.history = history;
+  order.markModified("refund.history");
+}
+
+function buildAutoRefundHistoryEntry(order, currentUser, previousRefundStatus) {
+  const actorName =
+    toTrimmedString(currentUser?.name || currentUser?.email, "") || "System";
+  return {
+    action: "auto_create_returned_shipment",
+    fromStatus: toTrimmedString(previousRefundStatus, "none"),
+    toStatus: "reviewing",
+    actorUserId: getUserId(currentUser) || null,
+    actorRole: getRole(currentUser) || "system",
+    actorName,
+    note: "Auto-opened refund review because GHN returned the shipment before successful delivery.",
+    meta: {
+      amount: Number(order?.refund?.amount || 0),
+      returnShipmentCode: toTrimmedString(order?.shipment?.orderCode, ""),
+      source: "ghn_returned_shipment",
+    },
+    createdAt: new Date(),
+  };
+}
+
+function ensureReturnedShipmentRefund(order, currentUser) {
+  const previousRefundStatus = normalizeStatus(order?.refund?.status, "none");
+  if (previousRefundStatus === "completed") {
+    return false;
+  }
+
+  const requestedBreakdown = buildReturnedShipmentRefundBreakdown(order);
+  if (Number(requestedBreakdown.total || 0) <= 0) {
+    return false;
+  }
+
+  const existingRefund =
+    order?.refund?.toObject ? order.refund.toObject() : order?.refund || {};
+  const hasActivePreviousRefund = hasActiveRefundCase({
+    refund: { status: previousRefundStatus },
+  });
+  const contactChannels =
+    Array.isArray(existingRefund.contactChannels) &&
+    existingRefund.contactChannels.length > 0
+      ? [...existingRefund.contactChannels]
+      : ["email"];
+  const nextRefundStatus = hasActivePreviousRefund
+    ? previousRefundStatus
+    : "reviewing";
+  const nextActionCode = hasActivePreviousRefund
+    ? nextRefundStatus === "approved"
+      ? "mark_return_pending"
+      : toTrimmedString(existingRefund.nextActionCode, "") || "start_review"
+    : "start_review";
+  const nextOwnerRole = hasActivePreviousRefund
+    ? toTrimmedString(existingRefund.currentOwnerRole, "sales") || "sales"
+    : "sales";
+  const nextInspectionStatus =
+    toTrimmedString(existingRefund.inspectionStatus, "").toLowerCase() ===
+      "passed" ||
+    toTrimmedString(existingRefund.inspectionStatus, "").toLowerCase() ===
+      "failed"
+      ? existingRefund.inspectionStatus
+      : "pending";
+
+  order.refund = {
+    ...existingRefund,
+    status: nextRefundStatus,
+    reason:
+      toTrimmedString(existingRefund.reason, "") ||
+      "Shipment was returned by GHN before successful delivery",
+    requestedAt:
+      existingRefund.requestedAt instanceof Date
+        ? existingRefund.requestedAt
+        : new Date(),
+    requestedBy: existingRefund.requestedBy || getUserId(currentUser) || null,
+    amount: requestedBreakdown.total,
+    requestedBreakdown,
+    requiresReturn: true,
+    contactChannels,
+    currentOwnerRole: nextOwnerRole,
+    currentOwnerUserId: hasActivePreviousRefund
+      ? existingRefund.currentOwnerUserId || null
+      : null,
+    nextActionCode: nextActionCode,
+    inspectionStatus: nextInspectionStatus,
+    inspectionNote:
+      nextInspectionStatus === "pending"
+        ? ""
+        : toTrimmedString(existingRefund.inspectionNote, ""),
+    returnShipmentCode: toTrimmedString(
+      order?.shipment?.orderCode || existingRefund.returnShipmentCode,
+      "",
+    ),
+    returnCarrier: "ghn",
+    rejectReason: "",
+  };
+  order.markModified("refund");
+
+  if (!hasActivePreviousRefund) {
+    appendRefundHistory(
+      order,
+      buildAutoRefundHistoryEntry(order, currentUser, previousRefundStatus),
+    );
+  }
+
+  return nextRefundStatus !== previousRefundStatus;
+}
+
+function canRequestDeliveryAgain(order) {
+  const latestStatus = normalizeStatus(order?.shipment?.latestStatus, "");
+  const currentOpsStage = normalizeOpsStage(order?.opsStage, "");
+
+  return (
+    GHN_WAITING_REDELIVERY_STATUSES.has(latestStatus) ||
+    currentOpsStage === ORDER_OPS_STAGE.WAITING_REDELIVERY
+  );
+}
+
+function applyReturnedShipmentBusinessRules(
+  order,
+  currentUser,
+  { previousOrderStatus = "", previousShipmentStatus = "" } = {},
+) {
+  const latestStatus = normalizeStatus(order?.shipment?.latestStatus, "");
+  if (
+    !GHN_RETURNED_STATUSES.has(latestStatus) ||
+    GHN_RETURNED_STATUSES.has(normalizeStatus(previousShipmentStatus, ""))
+  ) {
+    return {
+      refundAutoOpened: false,
+      releasePromotionRedemption: false,
+    };
+  }
+
+  const paymentMethod = normalizePaymentMethod(order?.paymentMethod, "");
+  const payLaterMethod = normalizePaymentMethod(order?.payLaterMethod, "");
+  const paidAmount = Math.max(0, Number(order?.paidAmount || 0));
+  const wasDelivered =
+    normalizeStatus(previousOrderStatus, "") === ORDER_STATUS.DELIVERED;
+
+  if (paymentMethod === PAYMENT_METHODS.COD && paidAmount <= 0) {
+    order.paymentStatus = "failed";
+    return {
+      refundAutoOpened: false,
+      releasePromotionRedemption: true,
+    };
+  }
+
+  if (
+    !wasDelivered &&
+    paymentMethod === PAYMENT_METHODS.SEPAY &&
+    payLaterMethod === PAYMENT_METHODS.COD &&
+    paidAmount > 0
+  ) {
+    return {
+      refundAutoOpened: false,
+      releasePromotionRedemption: false,
+    };
+  }
+
+  if (!wasDelivered && paymentMethod === PAYMENT_METHODS.SEPAY && paidAmount > 0) {
+    return {
+      refundAutoOpened: ensureReturnedShipmentRefund(order, currentUser),
+      releasePromotionRedemption: false,
+    };
+  }
+
+  return {
+    refundAutoOpened: false,
+    releasePromotionRedemption: false,
+  };
 }
 
 function pickFirst(raw = {}, keys = []) {
@@ -575,6 +833,7 @@ function buildShippingResponse(order, currentUser) {
     GHN_USE_TEST && hasShipment
       ? getAllowedNextTestStatuses(shipment?.latestStatus || shipment?.state)
       : [];
+  const hasOutstandingBalance = hasOutstandingSepayBalance(order);
 
   const availability = {
     [GHN_ACTION.VIEW_TRACKING]: canRead,
@@ -583,6 +842,8 @@ function buildShippingResponse(order, currentUser) {
       [ORDER_STATUS.CONFIRMED, ORDER_STATUS.PROCESSING].includes(
         order?.status,
       ) &&
+      normalizeOpsStage(order?.opsStage) === ORDER_OPS_STAGE.READY_TO_SHIP &&
+      !hasOutstandingBalance &&
       (!hasShipment || ["cancelled", "none"].includes(shippingState)),
     [GHN_ACTION.SYNC_SHIPMENT]:
       allowedActions.has(GHN_ACTION.SYNC_SHIPMENT) && hasShipment,
@@ -604,7 +865,8 @@ function buildShippingResponse(order, currentUser) {
     [GHN_ACTION.DELIVERY_AGAIN]:
       allowedActions.has(GHN_ACTION.DELIVERY_AGAIN) &&
       hasShipment &&
-      !["cancelled", "returned"].includes(shippingState),
+      !["cancelled", "returned"].includes(shippingState) &&
+      canRequestDeliveryAgain(order),
   };
 
   return {
@@ -687,12 +949,16 @@ function assertShipmentCanBeCreated(order) {
     throw new AppError("Order is not eligible for shipment creation", 400);
   }
 
-  if (
-    String(order?.orderType || "").trim().toLowerCase() === "ready_stock" &&
-    normalizeOpsStage(order?.opsStage) !== ORDER_OPS_STAGE.READY_TO_SHIP
-  ) {
+  if (normalizeOpsStage(order?.opsStage) !== ORDER_OPS_STAGE.READY_TO_SHIP) {
     throw new AppError(
-      "Ready-stock order must be packed and ready_to_ship before shipment creation",
+      "Order must be packed and at ready_to_ship before shipment creation",
+      400,
+    );
+  }
+
+  if (hasOutstandingSepayBalance(order)) {
+    throw new AppError(
+      `Order still has ${getCurrentSepayAmountDue(order).toLocaleString("en-US")} VND pending via SePay before shipment creation`,
       400,
     );
   }
@@ -712,24 +978,25 @@ function assertShipmentExists(order) {
 
 function getAllowedNextTestStatuses(currentStatus) {
   const normalized = normalizeStatus(currentStatus, "");
+  const graph = {
+    created: ["ready_to_pick"],
+    ready_to_pick: ["picking"],
+    picking: ["storing", "delivery_fail", "return"],
+    storing: ["transporting", "delivering", "delivery_fail", "waiting_to_return", "return"],
+    transporting: ["delivering", "delivery_fail", "waiting_to_return", "return"],
+    delivering: ["delivered", "delivery_fail", "waiting_to_return", "return"],
+    delivery_fail: ["waiting_to_return", "delivering"],
+    waiting_to_return: ["storing", "return"],
+    return: ["return_transporting", "returned"],
+    return_transporting: ["returning", "returned", "return_fail"],
+    returning: ["returned", "return_fail"],
+  };
 
-  if (!normalized || normalized === "created") {
-    return ["ready_to_pick"];
+  if (!normalized) {
+    return graph.created;
   }
 
-  if (normalized === "ready_to_pick") {
-    return ["picking", "returned"];
-  }
-
-  if (normalized === "picking") {
-    return ["transporting", "returned"];
-  }
-
-  if (normalized === "transporting") {
-    return ["delivered", "returned"];
-  }
-
-  return [];
+  return graph[normalized] || [];
 }
 
 function mapShipmentStateFromStatus(status) {
@@ -942,6 +1209,8 @@ async function persistShipmentUpdate(
   const previousShipmentState = normalizeStatus(order?.shipment?.state, "none");
   const previousOrderStatus = normalizeStatus(order?.status, "");
   const previousOpsStage = normalizeOpsStage(order?.opsStage);
+  const previousPaymentStatus = normalizeStatus(order?.paymentStatus, "");
+  const previousRefundStatus = normalizeStatus(order?.refund?.status, "none");
 
   order.shipment = {
     ...(order?.shipment?.toObject
@@ -983,8 +1252,25 @@ async function persistShipmentUpdate(
     order?.shipment?.orderCode || order?.shipment?.trackingCode,
   );
 
+  const returnedShipmentEffects = applyReturnedShipmentBusinessRules(order, currentUser, {
+    previousOrderStatus,
+    previousShipmentStatus,
+  });
+
   await commitOrderInventory(order, getUserId(currentUser));
   await order.save();
+
+  if (returnedShipmentEffects.releasePromotionRedemption) {
+    await promotionRedemptionService.releasePromotionRedemptionsForOrder(
+      order._id,
+      {
+        releaseReason: "cod_returned_unpaid",
+        orderStatus: order.status,
+        paymentStatus: order.paymentStatus,
+        paymentMethod: order.paymentMethod,
+      },
+    );
+  }
 
   publishStatusChange({
     domain: "shipping",
@@ -1030,6 +1316,39 @@ async function persistShipmentUpdate(
     });
   }
 
+  if (normalizeStatus(order.paymentStatus, "") !== previousPaymentStatus) {
+    publishStatusChange({
+      domain: "order",
+      entityId: order._id,
+      statusField: "paymentStatus",
+      previousStatus: previousPaymentStatus,
+      nextStatus: normalizeStatus(order.paymentStatus, ""),
+      currentUser,
+      recipientUserIds: [order.userId],
+      meta: {
+        paymentCode: order.paymentCode,
+        shipmentStatus: order.shipment.latestStatus,
+      },
+    });
+  }
+
+  if (normalizeStatus(order?.refund?.status, "none") !== previousRefundStatus) {
+    publishStatusChange({
+      domain: "order",
+      entityId: order._id,
+      statusField: "refund.status",
+      previousStatus: previousRefundStatus,
+      nextStatus: normalizeStatus(order?.refund?.status, "none"),
+      currentUser,
+      recipientUserIds: [order.userId],
+      meta: {
+        paymentCode: order.paymentCode,
+        amount: Number(order?.refund?.amount || 0),
+        shipmentStatus: order.shipment.latestStatus,
+      },
+    });
+  }
+
   if (normalizeOpsStage(order.opsStage) !== previousOpsStage) {
     publishStatusChange({
       domain: "order",
@@ -1053,6 +1372,9 @@ async function persistShipmentUpdate(
     previousOpsStage,
     action,
   });
+  if (returnedShipmentEffects.refundAutoOpened) {
+    await notifyCustomerRefundAutoOpened(order, previousRefundStatus);
+  }
 
   return Order.findById(order._id).populate(ORDER_POPULATE);
 }
@@ -1395,6 +1717,12 @@ async function requestDeliveryAgain(orderId, currentUser) {
   const order = await loadOrder(orderId);
   assertCanReadShipment(order, currentUser);
   assertShipmentExists(order);
+  if (!canRequestDeliveryAgain(order)) {
+    throw new AppError(
+      "Delivery again is only available when the shipment is waiting for redelivery",
+      400,
+    );
+  }
 
   await ghnService.requestDeliveryAgain(order.shipment.orderCode, {
     shopId: order.shipment.shopId || undefined,
@@ -1551,4 +1879,9 @@ module.exports = {
   requestDeliveryAgain,
   updateShipmentTestStatus,
   handleWebhookUpdate,
+  __test: {
+    getAllowedNextTestStatuses,
+    canRequestDeliveryAgain,
+    applyReturnedShipmentBusinessRules,
+  },
 };

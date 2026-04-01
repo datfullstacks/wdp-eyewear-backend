@@ -11,6 +11,7 @@ const {
   ORDER_TYPES,
   ORDER_STATUS,
   PRODUCT_STATUS,
+  PRODUCT_TYPES,
 } = require("../constants");
 const { generatePaymentCode } = require("../helpers/paymentCode");
 const {
@@ -145,6 +146,10 @@ const READY_STOCK_CHECKLIST_KEYS = Object.freeze([
   "productConditionChecked",
   "addressChecked",
   "packageReady",
+]);
+const CHECKOUT_EXCLUDED_PRODUCT_TYPES = new Set([
+  PRODUCT_TYPES.SERVICE,
+  PRODUCT_TYPES.GIFT_CARD,
 ]);
 
 const ORDER_POPULATE = [
@@ -1569,6 +1574,326 @@ function normalizeCheckoutPaymentMethod(
   return fallback;
 }
 
+function getRequestedCheckoutPaymentMethodForOrder(
+  order = {},
+  fallback = PAYMENT_METHODS.SEPAY,
+) {
+  if (
+    normalizeCheckoutPaymentMethod(order?.paymentMethod, "") ===
+      PAYMENT_METHODS.SEPAY &&
+    normalizeCheckoutPaymentMethod(order?.payLaterMethod, "") ===
+      PAYMENT_METHODS.COD
+  ) {
+    return PAYMENT_METHODS.COD;
+  }
+
+  return normalizeCheckoutPaymentMethod(order?.paymentMethod, fallback);
+}
+
+function getConfirmationPaidTarget(order = {}) {
+  if (
+    normalizeCheckoutPaymentMethod(order?.paymentMethod, "") ===
+    PAYMENT_METHODS.COD
+  ) {
+    return 0;
+  }
+
+  return Math.max(0, Number(order?.payNowTotal || 0));
+}
+
+function getCurrentSepayAmountDue(order = {}) {
+  if (
+    normalizeCheckoutPaymentMethod(order?.paymentMethod, "") !==
+    PAYMENT_METHODS.SEPAY
+  ) {
+    return 0;
+  }
+
+  const paidAmount = Math.max(0, Number(order?.paidAmount || 0));
+  const payNowTotal = Math.max(0, Number(order?.payNowTotal || 0));
+
+  if (paidAmount < payNowTotal) {
+    return Math.max(0, payNowTotal - paidAmount);
+  }
+
+  if (
+    normalizeCheckoutPaymentMethod(order?.payLaterMethod, "") ===
+    PAYMENT_METHODS.SEPAY
+  ) {
+    const total = Math.max(payNowTotal, Number(order?.total || 0));
+    return Math.max(0, total - paidAmount);
+  }
+
+  return 0;
+}
+
+function hasOutstandingSepayBalance(order = {}) {
+  return getCurrentSepayAmountDue(order) > 0;
+}
+
+function getInvoiceExpectedPaidTarget(
+  order = {},
+  paidAmount = Number(order?.paidAmount || 0),
+) {
+  const normalizedPaidAmount = Math.max(0, Number(paidAmount || 0));
+  const payNowTotal = Math.max(0, Number(order?.payNowTotal || 0));
+
+  if (
+    normalizeCheckoutPaymentMethod(order?.paymentMethod, "") !==
+    PAYMENT_METHODS.SEPAY
+  ) {
+    return payNowTotal;
+  }
+
+  if (normalizedPaidAmount < payNowTotal) {
+    return payNowTotal;
+  }
+
+  if (
+    normalizeCheckoutPaymentMethod(order?.payLaterMethod, "") ===
+    PAYMENT_METHODS.SEPAY
+  ) {
+    return Math.max(payNowTotal, Number(order?.total || 0));
+  }
+
+  return payNowTotal;
+}
+
+function normalizeProductType(value, fallback = "") {
+  const normalized = toTrimmedString(value, fallback).toLowerCase();
+  return Object.values(PRODUCT_TYPES).includes(normalized)
+    ? normalized
+    : fallback;
+}
+
+function getItemWorkflowFamily(item = {}) {
+  const normalized = toTrimmedString(item?.workflowFamily, "").toLowerCase();
+  if (Object.values(ORDER_TYPES).includes(normalized)) {
+    return normalized;
+  }
+
+  if (itemRequiresPrescriptionWorkflow(item)) {
+    return ORDER_TYPES.PRESCRIPTION;
+  }
+
+  return Boolean(item?.preOrder)
+    ? ORDER_TYPES.PRE_ORDER
+    : ORDER_TYPES.READY_STOCK;
+}
+
+function canUsePreOrderCod(items = [], runtimeConfig = null) {
+  if (runtimeConfig?.payments?.codEnabled === false) {
+    return false;
+  }
+
+  const preorderItems = (Array.isArray(items) ? items : []).filter((item) =>
+    Boolean(item?.preOrder),
+  );
+  if (!preorderItems.length) {
+    return false;
+  }
+
+  if (!preorderItems.every((item) => item?.preOrderCodAllowed !== false)) {
+    return false;
+  }
+
+  return preorderItems.some((item) => Number(item?.payLater || 0) > 0);
+}
+
+function getAllowedCheckoutPaymentMethods(
+  orderType,
+  runtimeConfig = null,
+  options = {},
+) {
+  const normalizedOrderType = toTrimmedString(
+    orderType,
+    ORDER_TYPES.READY_STOCK,
+  ).toLowerCase();
+  const methods = [PAYMENT_METHODS.SEPAY];
+
+  if (
+    normalizedOrderType === ORDER_TYPES.READY_STOCK &&
+    runtimeConfig?.payments?.codEnabled !== false
+  ) {
+    methods.push(PAYMENT_METHODS.COD);
+  }
+
+  if (
+    normalizedOrderType === ORDER_TYPES.PRE_ORDER &&
+    options.preOrderCodAllowed
+  ) {
+    methods.push(PAYMENT_METHODS.COD);
+  }
+
+  return methods;
+}
+
+function assertProductSupportedForOrderCheckout(product) {
+  const normalizedType = normalizeProductType(product?.type, "");
+  if (!CHECKOUT_EXCLUDED_PRODUCT_TYPES.has(normalizedType)) {
+    return;
+  }
+
+  throw new AppError(
+    `Product type "${normalizedType}" is outside the V1 checkout workflow and cannot be ordered through this flow`,
+    400,
+  );
+}
+
+async function resolveBundleWorkflowFamily(product, options = {}) {
+  const bundleItems = Array.isArray(product?.specs?.bundle?.items)
+    ? product.specs.bundle.items
+    : [];
+  if (!bundleItems.length) {
+    throw new AppError(
+      `Bundle "${product?.name || product?._id || "product"}" must define at least one bundled item`,
+      400,
+    );
+  }
+
+  const seenProductIds = new Set(
+    Array.isArray(options.seenProductIds) ? options.seenProductIds : [],
+  );
+  const currentProductId = toTrimmedString(product?._id, "");
+  if (currentProductId) {
+    seenProductIds.add(currentProductId);
+  }
+
+  const componentProductIds = [
+    ...new Set(
+      bundleItems
+        .map((item) => toTrimmedString(item?.productId, ""))
+        .filter(Boolean),
+    ),
+  ];
+  const components = await Product.find({
+    _id: { $in: componentProductIds },
+  }).select("_id name type status preOrder specs.bundle");
+  const componentMap = new Map(
+    components.map((component) => [String(component._id), component]),
+  );
+  const families = new Set();
+
+  for (const bundleItem of bundleItems) {
+    const componentProductId = toTrimmedString(bundleItem?.productId, "");
+    if (!componentProductId) {
+      throw new AppError(
+        `Bundle "${product?.name || product?._id || "product"}" contains an item without productId`,
+        400,
+      );
+    }
+
+    if (seenProductIds.has(componentProductId)) {
+      throw new AppError(
+        `Bundle "${product?.name || product?._id || "product"}" contains a recursive bundle reference`,
+        400,
+      );
+    }
+
+    const component = componentMap.get(componentProductId);
+    if (!component) {
+      throw new AppError(
+        `Bundle "${product?.name || product?._id || "product"}" references an unknown product`,
+        400,
+      );
+    }
+
+    if (
+      component.status &&
+      component.status !== PRODUCT_STATUS.ACTIVE
+    ) {
+      throw new AppError(
+        `Bundle "${product?.name || product?._id || "product"}" includes inactive product "${component.name}"`,
+        400,
+      );
+    }
+
+    const family = await resolveProductWorkflowFamily(component, {
+      runtimeConfig: options.runtimeConfig,
+      seenProductIds: [...seenProductIds, componentProductId],
+    });
+    families.add(family);
+  }
+
+  if (families.size !== 1) {
+    throw new AppError(
+      `Bundle "${product?.name || product?._id || "product"}" mixes workflow families and is not supported in V1 checkout`,
+      400,
+    );
+  }
+
+  const componentFamily = [...families][0] || ORDER_TYPES.READY_STOCK;
+  const bundlePreOrder =
+    typeof options.isPreOrderOverride === "boolean"
+      ? options.isPreOrderOverride
+      : resolvePreOrderRuntimeConfig(
+          product?.preOrder || {},
+          options.runtimeConfig || null,
+        ).enabled;
+
+  if (componentFamily === ORDER_TYPES.PRESCRIPTION && bundlePreOrder) {
+    throw new AppError(
+      `Bundle "${product?.name || product?._id || "product"}" cannot combine prescription workflow with pre-order in V1`,
+      400,
+    );
+  }
+
+  if (bundlePreOrder && componentFamily !== ORDER_TYPES.PRE_ORDER) {
+    throw new AppError(
+      `Bundle "${product?.name || product?._id || "product"}" is marked pre-order but contains non-pre-order items`,
+      400,
+    );
+  }
+
+  if (!bundlePreOrder && componentFamily === ORDER_TYPES.PRE_ORDER) {
+    throw new AppError(
+      `Bundle "${product?.name || product?._id || "product"}" contains pre-order items but is not configured as pre-order`,
+      400,
+    );
+  }
+
+  return bundlePreOrder ? ORDER_TYPES.PRE_ORDER : componentFamily;
+}
+
+async function resolveProductWorkflowFamily(product, options = {}) {
+  assertProductSupportedForOrderCheckout(product);
+
+  const productType = normalizeProductType(product?.type, "");
+  const isPreOrder =
+    typeof options.isPreOrderOverride === "boolean"
+      ? options.isPreOrderOverride
+      : resolvePreOrderRuntimeConfig(
+          product?.preOrder || {},
+          options.runtimeConfig || null,
+        ).enabled;
+
+  if (productType === PRODUCT_TYPES.BUNDLE) {
+    return resolveBundleWorkflowFamily(product, {
+      runtimeConfig: options.runtimeConfig || null,
+      isPreOrderOverride: isPreOrder,
+      seenProductIds: options.seenProductIds || [],
+    });
+  }
+
+  const requiresPrescriptionWorkflow = itemRequiresPrescriptionWorkflow({
+    type: productType,
+    customization: options.customization || {},
+  });
+
+  if (requiresPrescriptionWorkflow && isPreOrder) {
+    throw new AppError(
+      `Product "${product?.name || product?._id || "product"}" cannot combine prescription workflow with pre-order in V1`,
+      400,
+    );
+  }
+
+  return requiresPrescriptionWorkflow
+    ? ORDER_TYPES.PRESCRIPTION
+    : isPreOrder
+      ? ORDER_TYPES.PRE_ORDER
+      : ORDER_TYPES.READY_STOCK;
+}
+
 function forceItemsToCod(items = []) {
   return (Array.isArray(items) ? items : []).map((item) => ({
     ...item,
@@ -1617,7 +1942,7 @@ function buildProductShippingMeta(product, options = {}) {
 function stripItemShippingMeta(items = []) {
   return (Array.isArray(items) ? items : []).map((item) => {
     if (!item || typeof item !== "object") return item;
-    const { shippingMeta, ...rest } = item;
+    const { shippingMeta, workflowFamily, preOrderCodAllowed, ...rest } = item;
     return rest;
   });
 }
@@ -2034,6 +2359,7 @@ function buildItemDocFromOrderSnapshot(
     payNow,
     payLater,
     preOrder,
+    preOrderCodAllowed: preOrder ? product?.preOrder?.allowCod !== false : false,
     customization,
     shippingMeta: buildProductShippingMeta(product || {}, {
       collectionTiming: preOrder
@@ -2078,15 +2404,25 @@ async function buildItems(itemsInput, options = {}) {
         Boolean(existingOrderItem?.preOrder),
         existingOrderItem?.name || product?.name || "Product",
       );
-      itemDocs.push(
-        buildItemDocFromOrderSnapshot(input, existingOrderItem, product),
+      const itemDoc = buildItemDocFromOrderSnapshot(
+        input,
+        existingOrderItem,
+        product,
       );
+      itemDoc.workflowFamily = await resolveProductWorkflowFamily(product, {
+        runtimeConfig,
+        customization: itemDoc.customization,
+        isPreOrderOverride: Boolean(existingOrderItem?.preOrder),
+      });
+      itemDocs.push(itemDoc);
       continue;
     }
 
     if (!product) {
       throw new AppError("Product not found", 404);
     }
+
+    assertProductSupportedForOrderCheckout(product);
 
     if (product.status !== PRODUCT_STATUS.ACTIVE) {
       throw new AppError(
@@ -2153,6 +2489,11 @@ async function buildItems(itemsInput, options = {}) {
       depositPercent,
     );
     const customization = normalizeCustomization(input, { variant });
+    const workflowFamily = await resolveProductWorkflowFamily(product, {
+      runtimeConfig,
+      customization,
+      isPreOrderOverride: isPreOrder,
+    });
 
     itemDocs.push({
       productId: product._id,
@@ -2172,6 +2513,10 @@ async function buildItems(itemsInput, options = {}) {
       payNow,
       payLater,
       preOrder: isPreOrder,
+      preOrderCodAllowed: isPreOrder
+        ? Boolean(effectivePreOrderConfig.allowCod)
+        : false,
+      workflowFamily,
       customization,
       shippingMeta: buildProductShippingMeta(product, {
         collectionTiming: effectivePreOrderConfig.shippingCollectionTiming,
@@ -2265,24 +2610,18 @@ function mapInvoiceItemsFromOrder(order) {
 }
 
 function inferOrderType(items = []) {
-  const hasPreOrder = items.some((item) => item.preOrder);
-  const hasReadyStock = items.some((item) => !item.preOrder);
-  const hasPrescriptionWorkflow = items.some((item) =>
-    itemRequiresPrescriptionWorkflow(item),
-  );
+  const families = [
+    ...new Set((Array.isArray(items) ? items : []).map(getItemWorkflowFamily)),
+  ].filter(Boolean);
 
-  if (hasPreOrder && hasReadyStock) {
+  if (families.length > 1) {
     throw new AppError(
-      "Pre-order items and ready-stock items must be checked out separately",
+      "Items from different workflow families must be checked out separately",
       400,
     );
   }
 
-  if (hasPrescriptionWorkflow) {
-    return ORDER_TYPES.PRESCRIPTION;
-  }
-
-  return hasPreOrder ? ORDER_TYPES.PRE_ORDER : ORDER_TYPES.READY_STOCK;
+  return families[0] || ORDER_TYPES.READY_STOCK;
 }
 
 function getOrderEditWindowEndsAt(order) {
@@ -2365,8 +2704,8 @@ function requireRefundPayoutBankAccount(order) {
 
 function syncInvoiceByOrderState(invoice, order, transactionId) {
   const paidAmount = Number(order.paidAmount || 0);
-  const expectedPayNow = Number(order.payNowTotal || 0);
-  const amountDue = Math.max(0, expectedPayNow - paidAmount);
+  const expectedPaidTarget = getInvoiceExpectedPaidTarget(order, paidAmount);
+  const amountDue = Math.max(0, expectedPaidTarget - paidAmount);
 
   invoice.items = mapInvoiceItemsFromOrder(order);
   invoice.subtotal = Number(order.subtotal || 0);
@@ -2397,8 +2736,8 @@ function syncInvoiceByOrderState(invoice, order, transactionId) {
 
 async function createInvoiceFromOrder(order) {
   const paidAmount = Number(order.paidAmount || 0);
-  const expectedPayNow = Number(order.payNowTotal || 0);
-  const amountDue = Math.max(0, expectedPayNow - paidAmount);
+  const expectedPaidTarget = getInvoiceExpectedPaidTarget(order, paidAmount);
+  const amountDue = Math.max(0, expectedPaidTarget - paidAmount);
   const status =
     amountDue <= 0 ? "paid" : paidAmount > 0 ? "partial" : "issued";
 
@@ -2437,6 +2776,14 @@ async function ensureOrderInvoice(order) {
 function normalizeRefundStatus(status) {
   const normalized = toTrimmedString(status, "").toLowerCase();
   return REFUND_STATUSES.has(normalized) ? normalized : null;
+}
+
+async function maybeRestoreReadyStockInventory(order, actorId = null) {
+  if (toTrimmedString(order?.orderType, "").toLowerCase() !== ORDER_TYPES.READY_STOCK) {
+    return false;
+  }
+
+  return restoreOrderInventory(order, actorId);
 }
 
 function normalizeContactChannels(value) {
@@ -2751,12 +3098,18 @@ async function quote(
     payNowTotal: discountedProductPayNowTotal,
     payLaterTotal: discountedProductPayLaterTotal,
   } = sumAmounts(discounted.items);
+  const orderType = inferOrderType(discounted.items);
+  const preOrderCodAllowed = canUsePreOrderCod(discounted.items, runtimeConfig);
+  const allowedPaymentMethods = getAllowedCheckoutPaymentMethods(
+    orderType,
+    runtimeConfig,
+    { preOrderCodAllowed },
+  );
   const { shippingPayNow, shippingPayLater } = resolveShippingLegTotals(
     shippingFeeValue,
     shippingCollectionTiming,
   );
   const total = subtotal - discounted.discountAmount + shippingFeeValue;
-  const hasPreOrderItems = items.some((item) => Boolean(item?.preOrder));
   let effectiveItems = discounted.items;
   let effectiveShippingCollectionTiming = shippingCollectionTiming;
   let payNowTotal = Math.max(
@@ -2768,26 +3121,55 @@ async function quote(
     discountedProductPayLaterTotal + shippingPayLater,
   );
   let payNowMethod = payNowTotal > 0 ? PAYMENT_METHODS.SEPAY : null;
-  let payLaterMethod = payLaterTotal > 0 ? PAYMENT_METHODS.COD : null;
+  let payLaterMethod =
+    payLaterTotal > 0 && requestedPaymentMethod === PAYMENT_METHODS.SEPAY
+      ? PAYMENT_METHODS.SEPAY
+      : payLaterTotal > 0
+        ? PAYMENT_METHODS.COD
+        : null;
   let paymentMethod = payNowMethod || payLaterMethod || requestedPaymentMethod;
 
   if (requestedPaymentMethod === PAYMENT_METHODS.COD) {
     assertCodRuntimeEnabled(runtimeConfig);
 
-    if (hasPreOrderItems) {
+    if (orderType === ORDER_TYPES.PRE_ORDER) {
+      if (!preOrderCodAllowed) {
+        throw new AppError(
+          "COD is not available for this pre-order configuration in V1.",
+          400,
+        );
+      }
+
+      effectiveShippingCollectionTiming = "upfront";
+      payNowTotal = Math.max(
+        0,
+        discountedProductPayNowTotal + shippingFeeValue,
+      );
+      payLaterTotal = Math.max(0, discountedProductPayLaterTotal);
+      if (payNowTotal <= 0) {
+        throw new AppError(
+          "Pre-order COD requires a positive upfront SePay deposit.",
+          400,
+        );
+      }
+
+      payNowMethod = PAYMENT_METHODS.SEPAY;
+      payLaterMethod = payLaterTotal > 0 ? PAYMENT_METHODS.COD : null;
+      paymentMethod = PAYMENT_METHODS.SEPAY;
+    } else if (orderType === ORDER_TYPES.PRESCRIPTION) {
       throw new AppError(
-        "COD is only available for ready-stock orders. Pre-order orders still require upfront payment.",
+        "COD is not available for prescription orders in V1.",
         400,
       );
+    } else {
+      effectiveItems = forceItemsToCod(discounted.items);
+      effectiveShippingCollectionTiming = "on_delivery";
+      payNowTotal = 0;
+      payLaterTotal = Math.max(0, total);
+      payNowMethod = null;
+      payLaterMethod = payLaterTotal > 0 ? PAYMENT_METHODS.COD : null;
+      paymentMethod = PAYMENT_METHODS.COD;
     }
-
-    effectiveItems = forceItemsToCod(discounted.items);
-    effectiveShippingCollectionTiming = "on_delivery";
-    payNowTotal = 0;
-    payLaterTotal = Math.max(0, total);
-    payNowMethod = null;
-    payLaterMethod = payLaterTotal > 0 ? PAYMENT_METHODS.COD : null;
-    paymentMethod = PAYMENT_METHODS.COD;
   }
 
   return {
@@ -2804,6 +3186,8 @@ async function quote(
     shippingCollectionTiming: effectiveShippingCollectionTiming,
     discountAmount: discounted.discountAmount,
     total,
+    orderType,
+    allowedPaymentMethods,
     payNow: payNowTotal,
     payLater: payLaterTotal,
     payNowTotal,
@@ -2856,7 +3240,7 @@ async function createOrder({
     PAYMENT_METHODS.SEPAY,
   );
   const paymentCode = generatePaymentCode();
-  const orderType = inferOrderType(quoteResult.items);
+  const orderType = quoteResult.orderType || inferOrderType(quoteResult.items);
   const paidAt =
     selectedPaymentMethod === PAYMENT_METHODS.COD || quoteResult.payNowTotal > 0
       ? null
@@ -2960,7 +3344,7 @@ async function markPaidBySepay(paymentCode, amount, transactionId, webhookId) {
 
   order.paidAmount = Number(order.paidAmount || 0) + normalizedAmount;
   const paidEnough =
-    Number(order.paidAmount || 0) >= Number(order.payNowTotal || 0);
+    Number(order.paidAmount || 0) >= getConfirmationPaidTarget(order);
   order.paymentStatus = paidEnough ? "paid" : "partial";
   if (paidEnough && !order.paidAt) {
     order.paidAt = new Date();
@@ -3062,7 +3446,7 @@ async function updateOrderItems(id, currentUser, payload = {}) {
       : CART_TYPES.READY_STOCK;
   const quoteResult = await quote(itemsInput, shippingFee, discountAmount, {
     cartType,
-    paymentMethod: order.paymentMethod || PAYMENT_METHODS.SEPAY,
+    paymentMethod: getRequestedCheckoutPaymentMethodForOrder(order),
     voucherCode,
     shippingMethod: nextShippingMethod,
     shippingAddress: nextShippingAddress,
@@ -3072,7 +3456,8 @@ async function updateOrderItems(id, currentUser, payload = {}) {
     currentUser,
   });
   const nextOrderType = inferOrderType(quoteResult.items);
-  if (nextOrderType !== order.orderType) {
+  const resolvedNextOrderType = quoteResult.orderType || nextOrderType;
+  if (resolvedNextOrderType !== order.orderType) {
     throw new AppError(
       "Order type mismatch. Pre-order and ready-stock items must stay separated",
       400,
@@ -3267,7 +3652,7 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
 
   const quoteResult = await quote(existingItems, shippingFee, discountAmount, {
     cartType,
-    paymentMethod: order.paymentMethod || PAYMENT_METHODS.SEPAY,
+    paymentMethod: getRequestedCheckoutPaymentMethodForOrder(order),
     voucherCode,
     shippingMethod: order.shippingMethod || "standard",
     shippingAddress: order.shippingAddress || null,
@@ -3278,7 +3663,8 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
   });
 
   const nextOrderType = inferOrderType(quoteResult.items);
-  if (nextOrderType !== order.orderType) {
+  const resolvedNextOrderType = quoteResult.orderType || nextOrderType;
+  if (resolvedNextOrderType !== order.orderType) {
     throw new AppError(
       "Order type mismatch. Pre-order and ready-stock items must stay separated",
       400,
@@ -4021,6 +4407,7 @@ async function updateRefundStatus(id, currentUser, payload = {}) {
         order.refund.returnCarrier = returnCarrier;
       }
       syncOrderWithOpsStage(order, ORDER_OPS_STAGE.RETURNED);
+      await maybeRestoreReadyStockInventory(order, actorUserId);
       historyNote = inspectionNote || decisionNote || "Return item received and passed inspection.";
       historyMeta = {
         amount: Number(order.refund?.amount || 0),
@@ -4429,6 +4816,13 @@ async function updateOrderOpsStage(id, currentUser, stage) {
   syncOrderWithOpsStage(order, normalizedStage);
   syncOpsExecutionForStage(order, currentUser, normalizedStage);
 
+  if (
+    normalizedStage === ORDER_OPS_STAGE.CLOSED &&
+    currentStage === ORDER_OPS_STAGE.RETURNED
+  ) {
+    await maybeRestoreReadyStockInventory(order, getUserId(currentUser));
+  }
+
   if (!order.confirmedAt && order.status !== ORDER_STATUS.PENDING) {
     order.confirmedAt = new Date();
   }
@@ -4618,6 +5012,8 @@ module.exports = {
   quote,
   createOrder,
   markPaidBySepay,
+  getCurrentSepayAmountDue,
+  hasOutstandingSepayBalance,
   getOrderById,
   updateOrderItems,
   patchOrderItem,
@@ -4630,4 +5026,11 @@ module.exports = {
   updateOrderOpsExecution,
   listOrders,
   CART_TYPES,
+  __test: {
+    inferOrderType,
+    canUsePreOrderCod,
+    getAllowedCheckoutPaymentMethods,
+    getCurrentSepayAmountDue,
+    hasOutstandingSepayBalance,
+  },
 };
