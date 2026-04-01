@@ -1,7 +1,12 @@
 const Order = require("../models/Order");
 const Product = require("../models/Product");
 const AppError = require("../errors/AppError");
-const { ORDER_OPS_STAGE, ORDER_STATUS, PAYMENT_METHODS } = require("../constants");
+const {
+  ORDER_OPS_STAGE,
+  ORDER_STATUS,
+  ORDER_TYPES,
+  PAYMENT_METHODS,
+} = require("../constants");
 const {
   ROLE,
   GHN_ACTION,
@@ -161,6 +166,19 @@ function normalizePaymentMethod(value, fallback = "") {
   }
 
   return fallback;
+}
+
+function normalizeOrderType(value, fallback = "") {
+  const normalized = normalizeStatus(value, fallback);
+  return Object.values(ORDER_TYPES).includes(normalized) ? normalized : fallback;
+}
+
+function canCreateShipmentWithOutstandingSepayBalance(order) {
+  if (!hasOutstandingSepayBalance(order)) {
+    return true;
+  }
+
+  return normalizeOrderType(order?.orderType) === ORDER_TYPES.PRE_ORDER;
 }
 
 function normalizePhoneDigits(value) {
@@ -833,7 +851,9 @@ function buildShippingResponse(order, currentUser) {
     GHN_USE_TEST && hasShipment
       ? getAllowedNextTestStatuses(shipment?.latestStatus || shipment?.state)
       : [];
-  const hasOutstandingBalance = hasOutstandingSepayBalance(order);
+  const hasOutstandingBalance = !canCreateShipmentWithOutstandingSepayBalance(
+    order,
+  );
 
   const availability = {
     [GHN_ACTION.VIEW_TRACKING]: canRead,
@@ -956,7 +976,7 @@ function assertShipmentCanBeCreated(order) {
     );
   }
 
-  if (hasOutstandingSepayBalance(order)) {
+  if (!canCreateShipmentWithOutstandingSepayBalance(order)) {
     throw new AppError(
       `Order still has ${getCurrentSepayAmountDue(order).toLocaleString("en-US")} VND pending via SePay before shipment creation`,
       400,
@@ -1883,5 +1903,6 @@ module.exports = {
     getAllowedNextTestStatuses,
     canRequestDeliveryAgain,
     applyReturnedShipmentBusinessRules,
+    canCreateShipmentWithOutstandingSepayBalance,
   },
 };
