@@ -1,3 +1,4 @@
+const path = require("path");
 const mongoose = require("mongoose");
 
 const AppError = require("../errors/AppError");
@@ -11,6 +12,7 @@ const {
   WARRANTY_SUPPORT_STATUSES,
   SUPPORT_TICKET_STATUSES,
   SUPPORT_TICKET_OWNER_ROLES,
+  SUPPORT_ATTACHMENT_TYPES,
 } = require("../models/SupportTicket");
 const {
   isBusinessUser,
@@ -39,6 +41,26 @@ const WARRANTY_ELIGIBILITY_SET = new Set([
   "not_covered",
 ]);
 const SUPPORT_PRIORITY_SET = new Set(["low", "normal", "high"]);
+const SUPPORT_ATTACHMENT_TYPE_SET = new Set(SUPPORT_ATTACHMENT_TYPES);
+const AFTER_SALES_EVIDENCE_REQUIRED_CATEGORIES = new Set([
+  "order",
+  "refund",
+  "return",
+  "warranty",
+]);
+const SUPPORT_ATTACHMENT_IMAGE_EXTENSIONS = new Set([
+  ".jpg",
+  ".jpeg",
+  ".png",
+  ".webp",
+]);
+const SUPPORT_ATTACHMENT_VIDEO_EXTENSIONS = new Set([
+  ".mp4",
+  ".mov",
+  ".webm",
+  ".m4v",
+]);
+const MAX_SUPPORT_ATTACHMENTS = 6;
 const WARRANTY_TRANSITIONS = Object.freeze({
   requested: ["under_review", "rejected"],
   under_review: ["approved", "rejected"],
@@ -97,6 +119,149 @@ function normalizeOwnerRole(value) {
 
 function isWarrantyCategory(category) {
   return normalizeCategory(category) === "warranty";
+}
+
+function isHttpUrl(value) {
+  try {
+    const parsed = new URL(String(value));
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch (error) {
+    return false;
+  }
+}
+
+function inferSupportAttachmentType(raw = {}) {
+  const explicitType = toTrimmedString(
+    raw.type || raw.kind || raw.mediaType,
+    "",
+  ).toLowerCase();
+  if (SUPPORT_ATTACHMENT_TYPE_SET.has(explicitType)) {
+    return explicitType;
+  }
+
+  const mimeType = toTrimmedString(
+    raw.mimeType || raw.contentType || raw.mimetype,
+    "",
+  ).toLowerCase();
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+  if (mimeType.startsWith("video/")) {
+    return "video";
+  }
+
+  const source = toTrimmedString(
+    raw.url || raw.uri || raw.path || raw.name || "",
+    "",
+  )
+    .split("?")[0]
+    .split("#")[0];
+  const ext = path.extname(source).toLowerCase();
+  if (SUPPORT_ATTACHMENT_VIDEO_EXTENSIONS.has(ext)) {
+    return "video";
+  }
+  if (SUPPORT_ATTACHMENT_IMAGE_EXTENSIONS.has(ext)) {
+    return "image";
+  }
+
+  return "image";
+}
+
+function normalizeSupportAttachment(raw = {}, fieldName = "attachments") {
+  if (typeof raw === "string") {
+    const url = toTrimmedString(raw, "");
+    if (!url) {
+      return null;
+    }
+
+    if (!isHttpUrl(url)) {
+      throw new AppError(`${fieldName}.url must be a valid URL`, 400);
+    }
+
+    return {
+      url,
+      type: inferSupportAttachmentType({ url }),
+      mimeType: "",
+      name: "",
+      path: "",
+      size: null,
+    };
+  }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new AppError(`${fieldName} items must be objects`, 400);
+  }
+
+  const url = toTrimmedString(raw.url || raw.uri || raw.publicUrl, "");
+  if (!url) {
+    throw new AppError(`${fieldName}.url is required`, 400);
+  }
+  if (!isHttpUrl(url)) {
+    throw new AppError(`${fieldName}.url must be a valid URL`, 400);
+  }
+
+  const type = inferSupportAttachmentType(raw);
+  if (!SUPPORT_ATTACHMENT_TYPE_SET.has(type)) {
+    throw new AppError(`${fieldName}.type is invalid`, 400);
+  }
+
+  let size = null;
+  if (raw.size !== undefined && raw.size !== null && raw.size !== "") {
+    size = Number(raw.size);
+    if (!Number.isFinite(size) || size < 0) {
+      throw new AppError(`${fieldName}.size must be a positive number`, 400);
+    }
+  }
+
+  return {
+    url,
+    type,
+    mimeType: toTrimmedString(
+      raw.mimeType || raw.contentType || raw.mimetype,
+      "",
+    ).toLowerCase(),
+    name: toTrimmedString(raw.name || raw.filename, ""),
+    path: toTrimmedString(raw.path, ""),
+    size,
+  };
+}
+
+function normalizeSupportAttachments(raw, fieldName = "attachments") {
+  if (raw === undefined || raw === null) {
+    return [];
+  }
+
+  if (!Array.isArray(raw)) {
+    throw new AppError(`${fieldName} must be an array`, 400);
+  }
+
+  if (raw.length > MAX_SUPPORT_ATTACHMENTS) {
+    throw new AppError(
+      `${fieldName} supports at most ${MAX_SUPPORT_ATTACHMENTS} attachments`,
+      400,
+    );
+  }
+
+  const seen = new Set();
+  const attachments = [];
+  for (const item of raw) {
+    const normalized = normalizeSupportAttachment(item, fieldName);
+    if (!normalized || seen.has(normalized.url)) {
+      continue;
+    }
+
+    seen.add(normalized.url);
+    attachments.push(normalized);
+  }
+
+  return attachments;
+}
+
+function requiresAfterSalesEvidence(category, orderId) {
+  return (
+    Boolean(toTrimmedString(orderId, "")) &&
+    AFTER_SALES_EVIDENCE_REQUIRED_CATEGORIES.has(normalizeCategory(category))
+  );
 }
 
 function buildSupportRoutingHistoryEntry({
@@ -767,7 +932,14 @@ class SupportService {
     const orderId = toTrimmedString(payload.orderId || payload.order_id, "");
     const email = toTrimmedString(payload.email || currentUser?.email, "");
     const sender = isBusinessUser(currentUser) ? "staff" : "user";
-    const priorityInput = toTrimmedString(payload.priority, "normal").toLowerCase();
+    const priorityInput = toTrimmedString(payload.priority, "").toLowerCase();
+    const attachments = normalizeSupportAttachments(payload.attachments, "attachments");
+    const normalizedPriority = SUPPORT_PRIORITY_SET.has(priorityInput)
+      ? priorityInput
+      : "normal";
+    const resolvedPriority = isBusinessUser(currentUser)
+      ? normalizedPriority
+      : "normal";
 
     let order = null;
     if (orderId) {
@@ -816,6 +988,13 @@ class SupportService {
       status = "requested";
     }
 
+    if (requiresAfterSalesEvidence(category, order?._id || orderId) && attachments.length === 0) {
+      throw new AppError(
+        "At least one image or video is required for after-sales support tickets",
+        400,
+      );
+    }
+
     if (isBusinessUser(currentUser) && !isManager(currentUser) && !storeId) {
       throw new AppError(
         "storeId is required when staff creates a ticket without a store-linked order",
@@ -833,7 +1012,7 @@ class SupportService {
       subject,
       category,
       status,
-      priority: SUPPORT_PRIORITY_SET.has(priorityInput) ? priorityInput : "normal",
+      priority: resolvedPriority,
       orderId: order?._id || null,
       storeId: storeId || null,
       warranty,
@@ -855,6 +1034,7 @@ class SupportService {
         {
           sender,
           message,
+          attachments,
         },
       ],
       lastMessageAt: new Date(),
@@ -866,6 +1046,7 @@ class SupportService {
   async addReply(id, currentUser, payload = {}) {
     const ticket = await this.getTicketById(id, currentUser);
     const message = toTrimmedString(payload.message, "");
+    const attachments = normalizeSupportAttachments(payload.attachments, "attachments");
     if (!message) {
       throw new AppError("message is required", 400);
     }
@@ -877,7 +1058,7 @@ class SupportService {
     }
 
     const sender = isBusinessUser(currentUser) ? "staff" : "user";
-    ticket.messages.push({ sender, message });
+    ticket.messages.push({ sender, message, attachments });
     ticket.lastMessageAt = new Date();
 
     if (!isWarrantyCategory(ticket.category)) {
@@ -968,6 +1149,8 @@ module.exports = new SupportService();
 module.exports.__private = {
   normalizeCategory,
   isWarrantyCategory,
+  normalizeSupportAttachments,
+  requiresAfterSalesEvidence,
   resolveWarrantyReferenceDate,
   addMonths,
   buildWarrantySnapshot,

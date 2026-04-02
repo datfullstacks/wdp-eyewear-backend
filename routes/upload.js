@@ -9,10 +9,26 @@ const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+  'video/x-m4v',
   'model/gltf-binary',
   'model/gltf+json'
 ]);
-const ALLOWED_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.glb', '.gltf']);
+const ALLOWED_EXTENSIONS = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.mp4',
+  '.mov',
+  '.webm',
+  '.m4v',
+  '.glb',
+  '.gltf',
+]);
+const GENERIC_MIME_ALLOWED_EXTENSIONS = new Set(['.glb', '.gltf', '.mp4', '.mov', '.webm', '.m4v']);
 const MAX_UPLOAD_SIZE_MB = Number(process.env.UPLOAD_MAX_SIZE_MB || 25);
 const MAX_UPLOAD_SIZE_BYTES = Number.isFinite(MAX_UPLOAD_SIZE_MB) && MAX_UPLOAD_SIZE_MB > 0
   ? Math.floor(MAX_UPLOAD_SIZE_MB * 1024 * 1024)
@@ -25,9 +41,9 @@ const isFileTypeAllowed = (file = {}) => {
   if (!ALLOWED_EXTENSIONS.has(ext)) return false;
   if (ALLOWED_MIME_TYPES.has(mime)) return true;
 
-  // Some clients upload 3D files with a generic MIME type.
+  // Some clients upload media files with a generic MIME type.
   if (mime === 'application/octet-stream') {
-    return ['.glb', '.gltf'].includes(ext);
+    return GENERIC_MIME_ALLOWED_EXTENSIONS.has(ext);
   }
 
   return false;
@@ -38,7 +54,7 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
   fileFilter: (req, file, cb) => {
     if (!isFileTypeAllowed(file)) {
-      return cb(new Error('Unsupported file type. Allowed: jpg, png, webp, glb, gltf'));
+      return cb(new Error('Unsupported file type. Allowed: jpg, png, webp, mp4, mov, webm, glb, gltf'));
     }
     return cb(null, true);
   }

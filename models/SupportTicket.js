@@ -29,6 +29,43 @@ const SUPPORT_TICKET_OWNER_ROLES = [
   'operations',
   'manager',
 ];
+const SUPPORT_ATTACHMENT_TYPES = ['image', 'video'];
+
+const SupportAttachmentSchema = new mongoose.Schema(
+  {
+    url: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    type: {
+      type: String,
+      enum: SUPPORT_ATTACHMENT_TYPES,
+      default: 'image',
+    },
+    mimeType: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    name: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    path: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    size: {
+      type: Number,
+      min: 0,
+      default: null,
+    },
+  },
+  { _id: true, timestamps: false }
+);
 
 const SupportMessageSchema = new mongoose.Schema(
   {
@@ -41,6 +78,10 @@ const SupportMessageSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true
+    },
+    attachments: {
+      type: [SupportAttachmentSchema],
+      default: [],
     }
   },
   { _id: true, timestamps: true }
@@ -231,4 +272,5 @@ module.exports = {
   WARRANTY_SUPPORT_STATUSES,
   SUPPORT_TICKET_STATUSES,
   SUPPORT_TICKET_OWNER_ROLES,
+  SUPPORT_ATTACHMENT_TYPES,
 };
