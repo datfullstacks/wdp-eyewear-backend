@@ -99,6 +99,16 @@ const DEFAULT_REFUND_WORKFLOW_SETTINGS = Object.freeze({
   requiresManagerForShippingRefund: true,
   requirePayoutProof: false,
 });
+const OPEN_REFUND_STATUSES = new Set([
+  "requested",
+  "reviewing",
+  "waiting_customer_info",
+  "escalated_to_manager",
+  "approved",
+  "return_pending",
+  "return_received",
+  "processing",
+]);
 const REFUND_OVERRIDE_ACTIONS = new Set([
   "reassign_sales",
   "reassign_manager",
@@ -115,6 +125,13 @@ const SHIPPING_COLLECTION_TIMINGS = new Set([
   "on_delivery",
 ]);
 const SHIPPING_FEE_MODES = new Set(["exact", "estimated"]);
+const ORDER_PAYMENT_HOLD_MINUTES = 15;
+const ORDER_PAYMENT_TIMEOUT_REASON =
+  "Order payment window expired after 15 minutes";
+const ORDER_PAYMENT_TIMEOUT_LATE_PAYMENT_REASON =
+  "Payment was received after the 15-minute payment window had already expired";
+const ORDER_CANCELLED_LATE_PAYMENT_REASON =
+  "Payment was received after the order had already been cancelled";
 const SHIPMENT_BOUND_OPS_STAGES = new Set([
   ORDER_OPS_STAGE.SHIPMENT_CREATED,
   ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
@@ -332,6 +349,13 @@ function addHours(dateValue, hours = 12) {
   const date = new Date(dateValue || Date.now());
   const next = new Date(date.getTime());
   next.setHours(next.getHours() + Number(hours || 0));
+  return next;
+}
+
+function addMinutes(dateValue, minutes = 15) {
+  const date = new Date(dateValue || Date.now());
+  const next = new Date(date.getTime());
+  next.setMinutes(next.getMinutes() + Number(minutes || 0));
   return next;
 }
 
@@ -1675,8 +1699,320 @@ function getCurrentSepayAmountDue(order = {}) {
   return 0;
 }
 
+function toDateOrNull(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isOrderAwaitingInitialSepayPayment(order = {}) {
+  if (
+    normalizeCheckoutPaymentMethod(order?.paymentMethod, "") !==
+    PAYMENT_METHODS.SEPAY
+  ) {
+    return false;
+  }
+
+  const payNowTotal = Math.max(0, Number(order?.payNowTotal || 0));
+  const paidAmount = Math.max(0, Number(order?.paidAmount || 0));
+  return payNowTotal > 0 && paidAmount < payNowTotal;
+}
+
+function resolveOrderPaymentExpiresAt(
+  order = {},
+  { referenceTime = null, preserveExisting = true, allowCreate = true } = {},
+) {
+  if (!isOrderAwaitingInitialSepayPayment(order)) {
+    return null;
+  }
+
+  const existing = toDateOrNull(order?.paymentExpiresAt);
+  if (existing && preserveExisting) {
+    return existing;
+  }
+
+  if (!allowCreate) {
+    return existing || null;
+  }
+
+  return addMinutes(referenceTime || Date.now(), ORDER_PAYMENT_HOLD_MINUTES);
+}
+
+function syncOrderPaymentExpiry(order, options = {}) {
+  if (!order || typeof order !== "object") {
+    return null;
+  }
+
+  const nextPaymentExpiresAt = resolveOrderPaymentExpiresAt(order, options);
+  if (nextPaymentExpiresAt) {
+    order.paymentExpiresAt = nextPaymentExpiresAt;
+    return nextPaymentExpiresAt;
+  }
+
+  order.paymentExpiresAt = undefined;
+  return null;
+}
+
+function isOrderPaymentExpired(order = {}, now = new Date()) {
+  if (toTrimmedString(order?.status, "").toLowerCase() !== ORDER_STATUS.PENDING) {
+    return false;
+  }
+
+  const expiresAt = toDateOrNull(order?.paymentExpiresAt);
+  if (!expiresAt) {
+    return false;
+  }
+
+  const paymentStatus = toTrimmedString(order?.paymentStatus, "").toLowerCase();
+  if (![PAYMENT_STATUS.PENDING, PAYMENT_STATUS.PARTIAL].includes(paymentStatus)) {
+    return false;
+  }
+
+  return (
+    isOrderAwaitingInitialSepayPayment(order) &&
+    expiresAt.getTime() <= new Date(now || Date.now()).getTime()
+  );
+}
+
 function hasOutstandingSepayBalance(order = {}) {
   return getCurrentSepayAmountDue(order) > 0;
+}
+
+function getOrderTimeoutCustomerContext(order = {}) {
+  return {
+    id: String(order?.userId || ""),
+    role: "customer",
+    name: "System",
+  };
+}
+
+function hasOpenRefund(order = {}) {
+  const refundStatus = toTrimmedString(order?.refund?.status, "none").toLowerCase();
+  return OPEN_REFUND_STATUSES.has(refundStatus);
+}
+
+function upsertLatePaymentRefundRequest(order, currentUser, reason) {
+  const normalizedReason = toTrimmedString(
+    reason,
+    ORDER_CANCELLED_LATE_PAYMENT_REASON,
+  );
+  const previousRefundStatus = order?.refund?.status || "none";
+  const requestedBreakdown = splitPaidAmountIntoRefundBreakdown(
+    order,
+    Number(order?.paidAmount || 0),
+    false,
+  );
+
+  if (!hasOpenRefund(order)) {
+    order.refund = buildRefundRequestState(
+      order,
+      currentUser,
+      { reason: normalizedReason },
+      {
+        requestedBreakdown,
+        contactChannels: ["email"],
+        responsibility: "system",
+        requiresReturn: false,
+      },
+    );
+    appendRefundHistory(
+      order,
+      buildRefundHistoryEntry({
+        action: "create_request",
+        fromStatus: previousRefundStatus,
+        toStatus: order.refund?.status || "requested",
+        currentUser,
+        note: normalizedReason,
+        meta: {
+          amount: Number(order.refund?.amount || 0),
+          source: "late_payment_after_cancel",
+        },
+      }),
+    );
+
+    return {
+      previousRefundStatus,
+      nextRefundStatus: order.refund?.status || "requested",
+    };
+  }
+
+  order.refund.reason =
+    toTrimmedString(order.refund.reason, "") || normalizedReason;
+  order.refund.amount = Math.max(
+    Number(order.refund.amount || 0),
+    requestedBreakdown.total,
+  );
+  order.refund.requestedBreakdown = requestedBreakdown;
+  if (
+    !Array.isArray(order.refund.contactChannels) ||
+    order.refund.contactChannels.length === 0
+  ) {
+    order.refund.contactChannels = ["email"];
+  }
+  appendRefundHistory(
+    order,
+    buildRefundHistoryEntry({
+      action: "late_payment_received",
+      fromStatus: previousRefundStatus,
+      toStatus: order.refund?.status || previousRefundStatus || "requested",
+      currentUser,
+      note: normalizedReason,
+      meta: {
+        amount: Number(order.paidAmount || 0),
+        source: "late_payment_after_cancel",
+      },
+    }),
+  );
+  order.markModified("refund");
+
+  return {
+    previousRefundStatus,
+    nextRefundStatus: order.refund?.status || previousRefundStatus || "requested",
+  };
+}
+
+async function expireOrderForPaymentTimeout(orderInput, options = {}) {
+  const order =
+    orderInput && typeof orderInput === "object" && orderInput._id
+      ? orderInput
+      : await Order.findById(orderInput);
+
+  if (!order || !isOrderPaymentExpired(order, options.now)) {
+    return order;
+  }
+
+  return cancelOrder(
+    order._id,
+    getOrderTimeoutCustomerContext(order),
+    {
+      reason: ORDER_PAYMENT_TIMEOUT_REASON,
+    },
+    {
+      preservePaymentExpiry: true,
+    },
+  );
+}
+
+function applyIncomingSepayPayment(
+  order,
+  normalizedAmount,
+  transactionId,
+  webhookId,
+  options = {},
+) {
+  order.paidAmount = Number(order.paidAmount || 0) + normalizedAmount;
+  const paidEnough =
+    Number(order.paidAmount || 0) >= getConfirmationPaidTarget(order);
+  order.paymentStatus = paidEnough ? "paid" : "partial";
+  if (paidEnough && !order.paidAt) {
+    order.paidAt = new Date();
+    order.editWindowEndsAt = addHours(
+      order.paidAt,
+      Number(order.confirmationDeadlineHours || 12),
+    );
+  }
+
+  if (transactionId) {
+    order.sepayTransactionId = String(transactionId);
+  }
+
+  if (webhookId) {
+    order.sepayWebhookIds = [
+      ...new Set([...(order.sepayWebhookIds || []), String(webhookId)]),
+    ];
+  }
+
+  syncOrderPaymentExpiry(order, {
+    preserveExisting: true,
+    allowCreate: options.allowCreateExpiry !== false,
+  });
+
+  return { paidEnough };
+}
+
+async function applyLateSepayPaymentToCancelledOrder(
+  order,
+  normalizedAmount,
+  transactionId,
+  webhookId,
+  reason = ORDER_CANCELLED_LATE_PAYMENT_REASON,
+) {
+  const previousPaymentStatus = order.paymentStatus;
+  const systemActor = { role: "system", name: "System" };
+
+  applyIncomingSepayPayment(order, normalizedAmount, transactionId, webhookId, {
+    allowCreateExpiry: false,
+  });
+
+  const invoice = await ensureOrderInvoice(order);
+  const previousInvoiceStatus = invoice.status;
+  const { previousRefundStatus, nextRefundStatus } = upsertLatePaymentRefundRequest(
+    order,
+    systemActor,
+    reason,
+  );
+  syncInvoiceByOrderState(invoice, order, transactionId);
+
+  await Promise.all([order.save(), invoice.save()]);
+  await promotionRedemptionService.syncOrderPromotionRedemption(order, {
+    releaseReason: "order_cancelled",
+  });
+
+  if (toTrimmedString(order.paymentStatus, "") !== toTrimmedString(previousPaymentStatus, "")) {
+    publishStatusChange({
+      domain: "order",
+      entityId: order._id,
+      statusField: "paymentStatus",
+      previousStatus: previousPaymentStatus,
+      nextStatus: order.paymentStatus,
+      currentUser: systemActor,
+      recipientUserIds: [order.userId],
+      meta: {
+        paymentCode: order.paymentCode,
+        orderType: order.orderType,
+      },
+    });
+  }
+
+  if (toTrimmedString(previousRefundStatus, "") !== toTrimmedString(nextRefundStatus, "")) {
+    publishStatusChange({
+      domain: "order",
+      entityId: order._id,
+      statusField: "refund.status",
+      previousStatus: previousRefundStatus,
+      nextStatus: nextRefundStatus,
+      currentUser: systemActor,
+      recipientUserIds: [order.userId],
+      meta: {
+        paymentCode: order.paymentCode,
+        amount: Number(order.refund?.amount || 0),
+      },
+    });
+  }
+
+  if (toTrimmedString(previousInvoiceStatus, "") !== toTrimmedString(invoice.status, "")) {
+    publishStatusChange({
+      domain: "invoice",
+      entityId: invoice._id,
+      previousStatus: previousInvoiceStatus,
+      nextStatus: invoice.status,
+      currentUser: systemActor,
+      recipientUserIds: [order.userId],
+      meta: {
+        orderId: order._id,
+        invoiceCode: invoice.invoiceCode,
+      },
+    });
+  }
+
+  await notifyCustomerRefundUpdate(
+    order,
+    "Late payment received",
+    "Payment was received after the order was cancelled. A refund request has been updated automatically.",
+    nextRefundStatus,
+  );
+
+  return Order.findById(order._id).populate(ORDER_POPULATE);
 }
 
 function getInvoiceExpectedPaidTarget(
@@ -3297,6 +3633,17 @@ async function createOrder({
   const editWindowEndsAt = paidAt
     ? addHours(paidAt, confirmationDeadlineHours)
     : null;
+  const paymentExpiresAt = resolveOrderPaymentExpiresAt(
+    {
+      paymentMethod: selectedPaymentMethod,
+      payNowTotal: quoteResult.payNowTotal,
+      paidAmount: 0,
+    },
+    {
+      preserveExisting: false,
+      referenceTime: new Date(),
+    },
+  );
 
   const order = await Order.create({
     userId,
@@ -3322,6 +3669,7 @@ async function createOrder({
         : quoteResult.payNowTotal > 0
           ? 0
           : quoteResult.payNowTotal,
+    paymentExpiresAt: paymentExpiresAt || undefined,
     paidAt: paidAt || undefined,
     editWindowEndsAt: editWindowEndsAt || undefined,
     confirmationDeadlineHours,
@@ -3390,27 +3738,37 @@ async function markPaidBySepay(paymentCode, amount, transactionId, webhookId) {
     return Order.findById(order._id).populate(ORDER_POPULATE);
   }
 
-  order.paidAmount = Number(order.paidAmount || 0) + normalizedAmount;
-  const paidEnough =
-    Number(order.paidAmount || 0) >= getConfirmationPaidTarget(order);
-  order.paymentStatus = paidEnough ? "paid" : "partial";
-  if (paidEnough && !order.paidAt) {
-    order.paidAt = new Date();
-    order.editWindowEndsAt = addHours(
-      order.paidAt,
-      Number(order.confirmationDeadlineHours || 12),
+  if (toTrimmedString(order.status, "").toLowerCase() === ORDER_STATUS.CANCELLED) {
+    return applyLateSepayPaymentToCancelledOrder(
+      order,
+      normalizedAmount,
+      transactionId,
+      webhookId,
+      order.paymentExpiresAt
+        ? ORDER_PAYMENT_TIMEOUT_LATE_PAYMENT_REASON
+        : ORDER_CANCELLED_LATE_PAYMENT_REASON,
     );
   }
 
-  if (transactionId) {
-    order.sepayTransactionId = String(transactionId);
+  if (isOrderPaymentExpired(order)) {
+    applyIncomingSepayPayment(order, normalizedAmount, transactionId, webhookId);
+    const invoice = await ensureOrderInvoice(order);
+    syncInvoiceByOrderState(invoice, order, transactionId);
+    await Promise.all([order.save(), invoice.save()]);
+
+    return cancelOrder(
+      order._id,
+      getOrderTimeoutCustomerContext(order),
+      {
+        reason: ORDER_PAYMENT_TIMEOUT_LATE_PAYMENT_REASON,
+      },
+      {
+        preservePaymentExpiry: true,
+      },
+    );
   }
 
-  if (webhookId) {
-    order.sepayWebhookIds = [
-      ...new Set([...(order.sepayWebhookIds || []), String(webhookId)]),
-    ];
-  }
+  applyIncomingSepayPayment(order, normalizedAmount, transactionId, webhookId);
 
   const invoice = await ensureOrderInvoice(order);
   syncInvoiceByOrderState(invoice, order, transactionId);
@@ -3434,11 +3792,11 @@ async function getOrderById(id, currentUser) {
     assertBusinessUserCanAccessOrder(order, currentUser);
   }
 
-  return order;
+  return expireOrderForPaymentTimeout(order);
 }
 
 async function updateOrderItems(id, currentUser, payload = {}) {
-  const order = await Order.findById(id);
+  let order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
 
   const userId = getUserId(currentUser);
@@ -3450,6 +3808,11 @@ async function updateOrderItems(id, currentUser, payload = {}) {
 
   if (!isOwner) {
     assertBusinessUserCanAccessOrder(order, currentUser);
+  }
+
+  if (isOrderPaymentExpired(order)) {
+    await expireOrderForPaymentTimeout(order);
+    order = await Order.findById(id);
   }
 
   if (!staff) {
@@ -3601,6 +3964,7 @@ async function updateOrderItems(id, currentUser, payload = {}) {
       order.paymentStatus = "partial";
     }
   }
+  syncOrderPaymentExpiry(order, { preserveExisting: true });
 
   if (!staff) {
     order.lastCustomerEditAt = new Date();
@@ -3618,7 +3982,7 @@ async function updateOrderItems(id, currentUser, payload = {}) {
 }
 
 async function patchOrderItem(id, itemId, currentUser, payload = {}) {
-  const order = await Order.findById(id);
+  let order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
 
   const userId = getUserId(currentUser);
@@ -3630,6 +3994,11 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
 
   if (!isOwner) {
     assertBusinessUserCanAccessOrder(order, currentUser);
+  }
+
+  if (isOrderPaymentExpired(order)) {
+    await expireOrderForPaymentTimeout(order);
+    order = await Order.findById(id);
   }
 
   if (!staff) {
@@ -3753,6 +4122,7 @@ async function patchOrderItem(id, itemId, currentUser, payload = {}) {
   } else {
     order.paymentStatus = "partial";
   }
+  syncOrderPaymentExpiry(order, { preserveExisting: true });
 
   if (!staff) {
     order.lastCustomerEditAt = new Date();
@@ -3992,7 +4362,7 @@ async function createRefundRequest(id, currentUser, payload = {}) {
   return Order.findById(order._id).populate(ORDER_POPULATE);
 }
 
-async function cancelOrder(id, currentUser, payload = {}) {
+async function cancelOrder(id, currentUser, payload = {}, options = {}) {
   const order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
 
@@ -4027,6 +4397,9 @@ async function cancelOrder(id, currentUser, payload = {}) {
 
   order.status = ORDER_STATUS.CANCELLED;
   syncOrderWithOpsStage(order, ORDER_OPS_STAGE.CANCELLED);
+  if (options.preservePaymentExpiry !== true) {
+    order.paymentExpiresAt = undefined;
+  }
   await restoreOrderInventory(order, userId);
 
   const paidAmount = Number(order.paidAmount || 0);
@@ -4761,9 +5134,13 @@ async function updateOrderStatus(id, currentUser, status) {
 
   assertOrderStatusPermission(currentUser, normalizedStatus);
 
-  const order = await Order.findById(id);
+  let order = await Order.findById(id);
   if (!order) throw new AppError("Order not found", 404);
   assertBusinessUserCanAccessOrder(order, currentUser);
+  if (isOrderPaymentExpired(order)) {
+    await expireOrderForPaymentTimeout(order);
+    order = await Order.findById(id);
+  }
   const previousOrderStatus = order.status;
   const previousOpsStage = order.opsStage;
 
@@ -5059,14 +5436,31 @@ async function listOrders(currentUser, options = {}) {
     }
   }
 
-  const [orders, total] = await Promise.all([
-    Order.find(query)
-      .populate(ORDER_POPULATE)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit),
-    Order.countDocuments(query),
-  ]);
+  let orders = [];
+  let total = 0;
+
+  const loadOrders = async () => {
+    const [nextOrders, nextTotal] = await Promise.all([
+      Order.find(query)
+        .populate(ORDER_POPULATE)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Order.countDocuments(query),
+    ]);
+
+    orders = nextOrders;
+    total = nextTotal;
+  };
+
+  await loadOrders();
+
+  if (orders.some((order) => isOrderPaymentExpired(order))) {
+    for (const order of orders) {
+      await expireOrderForPaymentTimeout(order);
+    }
+    await loadOrders();
+  }
 
   return {
     orders,
@@ -5103,6 +5497,7 @@ module.exports = {
     getAllowedCheckoutPaymentMethods,
     getCurrentSepayAmountDue,
     hasOutstandingSepayBalance,
-    assertOrderCanBeConfirmed,
+    resolveOrderPaymentExpiresAt,
+    isOrderPaymentExpired,
   },
 };

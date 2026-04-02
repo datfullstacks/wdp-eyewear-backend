@@ -157,6 +157,7 @@ exports.create = asyncHandler(async (req, res) => {
     bankAccountName: SEPAY_BANK_ACCOUNT_NAME || null,
     description: paymentDescription,
     instruction: paymentInstruction,
+    expiresAt: order.paymentExpiresAt || null,
     qrUrl: !isCodOrder && payAmount > 0
       ? buildSepayQrUrl({
           accountNumber: bankAccountNumber,
@@ -171,6 +172,7 @@ exports.create = asyncHandler(async (req, res) => {
     res,
     {
       orderId: order._id,
+      createdAt: order.createdAt,
       invoice: invoice
         ? {
             invoiceId: invoice._id,
@@ -200,6 +202,7 @@ exports.create = asyncHandler(async (req, res) => {
       allowedPaymentMethods: quote.allowedPaymentMethods,
       paymentMethod: quote.paymentMethod,
       paymentStatus: order.paymentStatus,
+      paymentExpiresAt: order.paymentExpiresAt || null,
       voucherCode: order.voucherCode || null,
     },
     "Checkout created. Proceed with Sepay payment.",

@@ -343,6 +343,7 @@ const OrderSchema = new mongoose.Schema(
       default: "pending",
     },
     paidAmount: { type: Number, default: 0, min: 0 },
+    paymentExpiresAt: { type: Date },
     paidAt: { type: Date },
     editWindowEndsAt: { type: Date },
     lastCustomerEditAt: { type: Date },
