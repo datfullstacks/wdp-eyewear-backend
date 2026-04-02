@@ -2948,6 +2948,127 @@ function itemRequiresPrescriptionWorkflow(item = {}) {
   );
 }
 
+function getOrderItemEntityId(value) {
+  if (value && typeof value === "object") {
+    return toTrimmedString(value._id || value.id, "");
+  }
+
+  return toTrimmedString(value, "");
+}
+
+function getOrderItemCombineTarget(item = {}) {
+  const productId = getOrderItemEntityId(
+    item?.customization?.combineWith?.productId,
+  );
+  if (!productId) {
+    return null;
+  }
+
+  return {
+    productId,
+    variantId: getOrderItemEntityId(item?.customization?.combineWith?.variantId),
+  };
+}
+
+function itemMatchesCombineTarget(item = {}, target = null) {
+  if (!target?.productId) {
+    return false;
+  }
+
+  const itemProductId = getOrderItemEntityId(item?.productId);
+  if (!itemProductId || itemProductId !== target.productId) {
+    return false;
+  }
+
+  const targetVariantId = toTrimmedString(target.variantId, "");
+  if (!targetVariantId) {
+    return true;
+  }
+
+  return getOrderItemEntityId(item?.variantId) === targetVariantId;
+}
+
+function itemsReferenceEachOther(sourceItem = {}, targetItem = {}) {
+  const sourceTarget = getOrderItemCombineTarget(sourceItem);
+  if (!sourceTarget || !itemMatchesCombineTarget(targetItem, sourceTarget)) {
+    return false;
+  }
+
+  const targetSource = getOrderItemCombineTarget(targetItem);
+  if (!targetSource) {
+    return false;
+  }
+
+  return itemMatchesCombineTarget(sourceItem, targetSource);
+}
+
+function isAllowedPrescriptionFrameCombo(items = []) {
+  const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (normalizedItems.length < 2) {
+    return false;
+  }
+
+  const lensItems = [];
+  const frameItems = [];
+
+  for (const item of normalizedItems) {
+    const family = getItemWorkflowFamily(item);
+    const productType = normalizeProductType(item?.type, "");
+
+    if (family === ORDER_TYPES.PRESCRIPTION) {
+      if (productType !== PRODUCT_TYPES.LENS || Boolean(item?.preOrder)) {
+        return false;
+      }
+      lensItems.push(item);
+      continue;
+    }
+
+    if (family === ORDER_TYPES.READY_STOCK) {
+      if (productType !== PRODUCT_TYPES.FRAME || Boolean(item?.preOrder)) {
+        return false;
+      }
+      frameItems.push(item);
+      continue;
+    }
+
+    return false;
+  }
+
+  if (
+    !lensItems.length ||
+    !frameItems.length ||
+    normalizedItems.length !== lensItems.length + frameItems.length
+  ) {
+    return false;
+  }
+
+  if (lensItems.length === 1 && frameItems.length === 1) {
+    return true;
+  }
+
+  if (lensItems.length !== frameItems.length) {
+    return false;
+  }
+
+  const matchedFrameIndexes = new Set();
+
+  for (const lensItem of lensItems) {
+    const frameIndex = frameItems.findIndex(
+      (frameItem, index) =>
+        !matchedFrameIndexes.has(index) &&
+        itemsReferenceEachOther(lensItem, frameItem),
+    );
+
+    if (frameIndex < 0) {
+      return false;
+    }
+
+    matchedFrameIndexes.add(frameIndex);
+  }
+
+  return matchedFrameIndexes.size === frameItems.length;
+}
+
 function mergeCustomization(base = {}, patch = {}) {
   const next = {
     ...(base || {}),
@@ -2999,6 +3120,15 @@ function inferOrderType(items = []) {
   ].filter(Boolean);
 
   if (families.length > 1) {
+    if (
+      families.length === 2 &&
+      families.includes(ORDER_TYPES.PRESCRIPTION) &&
+      families.includes(ORDER_TYPES.READY_STOCK) &&
+      isAllowedPrescriptionFrameCombo(items)
+    ) {
+      return ORDER_TYPES.PRESCRIPTION;
+    }
+
     throw new AppError(
       "Items from different workflow families must be checked out separately",
       400,
