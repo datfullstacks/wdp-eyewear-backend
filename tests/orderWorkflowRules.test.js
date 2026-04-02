@@ -136,24 +136,80 @@ test("multiple mixed frame and lens items still require valid pairing", () => {
   );
 });
 
-test("mixed prescription and ready stock items that are not frame plus lens remain blocked", () => {
-  assert.throws(
-    () =>
-      inferOrderType([
-        makeItem({
-          productId: "accessory-1",
-          variantId: "accessory-variant-1",
-          type: "accessory",
-        }),
-        makeItem({
+test("prescription lens can checkout with ready-stock accessory items in the same order", () => {
+  const orderType = inferOrderType([
+    makeItem({
+      productId: "accessory-1",
+      variantId: "accessory-variant-1",
+      type: "accessory",
+    }),
+    makeItem({
+      productId: "lens-1",
+      variantId: "lens-variant-1",
+      type: "lens",
+      customization: {
+        prescription: { mode: "manual" },
+      },
+    }),
+  ]);
+
+  assert.equal(orderType, ORDER_TYPES.PRESCRIPTION);
+});
+
+test("multiple paired frame and lens items can still include extra ready-stock items", () => {
+  const orderType = inferOrderType([
+    makeItem({
+      productId: "frame-1",
+      variantId: "frame-variant-1",
+      type: "frame",
+      customization: {
+        combineWith: {
           productId: "lens-1",
           variantId: "lens-variant-1",
-          type: "lens",
-          customization: {
-            prescription: { mode: "manual" },
-          },
-        }),
-      ]),
-    /Items from different workflow families must be checked out separately/,
-  );
+        },
+      },
+    }),
+    makeItem({
+      productId: "lens-1",
+      variantId: "lens-variant-1",
+      type: "lens",
+      customization: {
+        prescription: { mode: "manual" },
+        combineWith: {
+          productId: "frame-1",
+          variantId: "frame-variant-1",
+        },
+      },
+    }),
+    makeItem({
+      productId: "frame-2",
+      variantId: "frame-variant-2",
+      type: "frame",
+      customization: {
+        combineWith: {
+          productId: "lens-2",
+          variantId: "lens-variant-2",
+        },
+      },
+    }),
+    makeItem({
+      productId: "lens-2",
+      variantId: "lens-variant-2",
+      type: "lens",
+      customization: {
+        prescription: { mode: "upload", attachmentUrls: ["https://example.com/rx.jpg"] },
+        combineWith: {
+          productId: "frame-2",
+          variantId: "frame-variant-2",
+        },
+      },
+    }),
+    makeItem({
+      productId: "sunglasses-1",
+      variantId: "sunglasses-variant-1",
+      type: "sunglasses",
+    }),
+  ]);
+
+  assert.equal(orderType, ORDER_TYPES.PRESCRIPTION);
 });
