@@ -1339,6 +1339,10 @@ function assertOrderCanBeConfirmed(order, currentUser) {
     throw new AppError("Order not found", 404);
   }
 
+  const normalizedOrderType = toTrimmedString(
+    order?.orderType,
+    ORDER_TYPES.READY_STOCK,
+  ).toLowerCase();
   const normalizedPaymentStatus = String(order.paymentStatus || "")
     .trim()
     .toLowerCase();
@@ -1358,6 +1362,10 @@ function assertOrderCanBeConfirmed(order, currentUser) {
       throw new AppError("Manager can only confirm escalated orders", 403);
     }
 
+    if (normalizedOrderType === ORDER_TYPES.READY_STOCK) {
+      return;
+    }
+
     if (
       normalizedPaymentStatus !== PAYMENT_STATUS.PAID &&
       normalizeCheckoutPaymentMethod(order.paymentMethod, "") !==
@@ -1374,6 +1382,10 @@ function assertOrderCanBeConfirmed(order, currentUser) {
 
   if (normalizedApprovalState === "manager_review_requested") {
     throw new AppError("This order is waiting for manager review", 403);
+  }
+
+  if (normalizedOrderType === ORDER_TYPES.READY_STOCK) {
+    return;
   }
 
   if (normalizedPaymentStatus !== PAYMENT_STATUS.PAID) {
@@ -5091,5 +5103,6 @@ module.exports = {
     getAllowedCheckoutPaymentMethods,
     getCurrentSepayAmountDue,
     hasOutstandingSepayBalance,
+    assertOrderCanBeConfirmed,
   },
 };
