@@ -87,6 +87,40 @@ const SupportMessageSchema = new mongoose.Schema(
   { _id: true, timestamps: true }
 );
 
+const WarrantyServiceOrderSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    status: {
+      type: String,
+      enum: ["created", "in_service", "completed", "cancelled"],
+      default: "created",
+    },
+    note: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    createdAt: {
+      type: Date,
+      default: null,
+    },
+    updatedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false, timestamps: false }
+);
+
 const WarrantyMetadataSchema = new mongoose.Schema(
   {
     orderItemId: {
@@ -148,6 +182,10 @@ const WarrantyMetadataSchema = new mongoose.Schema(
     },
     completedAt: {
       type: Date,
+      default: null,
+    },
+    serviceOrder: {
+      type: WarrantyServiceOrderSchema,
       default: null,
     },
   },

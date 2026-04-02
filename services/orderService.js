@@ -3303,7 +3303,11 @@ function normalizeRefundStatus(status) {
 }
 
 async function maybeRestoreReadyStockInventory(order, actorId = null) {
-  if (toTrimmedString(order?.orderType, "").toLowerCase() !== ORDER_TYPES.READY_STOCK) {
+  if (
+    ![ORDER_TYPES.READY_STOCK, ORDER_TYPES.PRE_ORDER].includes(
+      toTrimmedString(order?.orderType, "").toLowerCase(),
+    )
+  ) {
     return false;
   }
 
@@ -4450,12 +4454,16 @@ async function createRefundRequest(id, currentUser, payload = {}) {
       fieldName: "bankAccount",
     },
   );
-  const baseBreakdown = splitPaidAmountIntoRefundBreakdown(order, paidAmount, true);
+  const requestedBreakdown =
+    payload.requestedBreakdown !== undefined ||
+    payload.requested_breakdown !== undefined
+      ? resolveRequestedRefundBreakdown(order, payload, paidAmount)
+      : splitPaidAmountIntoRefundBreakdown(order, paidAmount, true);
 
   const previousRefundStatus = order.refund?.status || "none";
 
   order.refund = buildRefundRequestState(order, currentUser, payload, {
-    requestedBreakdown: baseBreakdown,
+    requestedBreakdown,
     bankAccount: requestedBankAccount,
     note: payload.note,
     requiresReturn: false,

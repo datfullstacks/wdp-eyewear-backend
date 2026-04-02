@@ -359,6 +359,10 @@ exports.createProductRules = [
       `preOrder.shippingCollectionTiming must be one of: ${PREORDER_SHIPPING_COLLECTION_TIMINGS.join(', ')}`
     ),
   body('preOrder.note').optional().isString().isLength({ max: 200 }),
+  body('fulfillment.warrantyMonths')
+    .optional({ nullable: true })
+    .isInt({ min: 0 })
+    .withMessage('fulfillment.warrantyMonths must be >= 0'),
   body().custom((value, { req }) => {
     const po = req.body?.preOrder;
     if (po?.enabled) {
@@ -455,6 +459,10 @@ exports.updateProductRules = [
       `preOrder.shippingCollectionTiming must be one of: ${PREORDER_SHIPPING_COLLECTION_TIMINGS.join(', ')}`
     ),
   body('preOrder.note').optional().isString().isLength({ max: 200 }),
+  body('fulfillment.warrantyMonths')
+    .optional({ nullable: true })
+    .isInt({ min: 0 })
+    .withMessage('fulfillment.warrantyMonths must be >= 0'),
   body().custom((value, { req }) => {
     const po = req.body?.preOrder;
     if (po?.enabled) {

@@ -7,6 +7,8 @@ const {
   createSupportTicketRules,
   replySupportTicketRules,
   updateSupportTicketStatusRules,
+  createWarrantyOrderRules,
+  createWarrantyRefundRules,
 } = require("../validators/supportValidator");
 
 async function runRules(rules, req) {
@@ -130,4 +132,42 @@ test("support validator requires status updates to provide a supported status", 
 
   assert.ok(errors.length >= 1);
   assert.ok(errors.some((error) => /status is required/i.test(error.msg)));
+});
+
+test("support validator accepts warranty-order note payloads within the limit", async () => {
+  const errors = await runRules(createWarrantyOrderRules, {
+    body: {
+      note: "Sale confirmed lens defect within warranty window",
+      decisionNote: "Approved for warranty remanufacture",
+      serviceNote: "Prepare replacement lens workflow",
+    },
+  });
+
+  assert.deepEqual(errors, []);
+});
+
+test("support validator rejects warranty-order notes that exceed the limit", async () => {
+  const errors = await runRules(createWarrantyOrderRules, {
+    body: {
+      note: "x".repeat(501),
+    },
+  });
+
+  assert.ok(errors.some((error) => /note cannot exceed 500 characters/i.test(error.msg)));
+});
+
+test("support validator accepts warranty-refund payloads with note and bank account", async () => {
+  const errors = await runRules(createWarrantyRefundRules, {
+    body: {
+      note: "Out of replacement stock, convert this warranty case to refund",
+      bankAccount: {
+        bankCode: "VCB",
+        bankName: "Vietcombank",
+        accountNumber: "1234567890",
+        accountHolder: "Nguyen Van A",
+      },
+    },
+  });
+
+  assert.deepEqual(errors, []);
 });

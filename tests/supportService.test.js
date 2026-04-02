@@ -5,7 +5,9 @@ const AppError = require("../errors/AppError");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
 const Store = require("../models/Store");
+const User = require("../models/User");
 const supportTicketModel = require("../models/SupportTicket");
+const orderService = require("../services/orderService");
 const supportService = require("../services/supportService");
 
 const { SupportTicket } = supportTicketModel;
@@ -270,6 +272,296 @@ test("support service creates warranty ticket from order item and product warran
   assert.equal(createdPayloads[0].storeId, "507f191e810c19729de86002");
   assert.equal(createdPayloads[0].warranty.eligibility, "eligible");
   assert.equal(ticket.status, "requested");
+});
+
+test("support service lets sales create a warranty order only while coverage is still active", async (t) => {
+  const ticket = {
+    _id: "507f191e810c19729de86106",
+    userId: { _id: "customer-1" },
+    storeId: "507f191e810c19729de86102",
+    category: "warranty",
+    status: "under_review",
+    warranty: {
+      itemName: "Titanium Frame",
+      warrantyMonths: 12,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      eligibility: "eligible",
+      serviceOrder: null,
+    },
+    messages: [],
+    routingHistory: [],
+    save: async () => ticket,
+  };
+  const restore = patchMethods([
+    {
+      target: SupportTicket,
+      key: "findById",
+      value: () => createTicketQuery(ticket),
+    },
+  ]);
+  t.after(restore);
+
+  const result = await supportService.createWarrantyOrder(
+    "507f191e810c19729de86106",
+    {
+      id: "sales-1",
+      role: "sales",
+      storeAccess: { mode: "all" },
+    },
+    {
+      note: "Confirmed within the warranty period",
+    },
+  );
+
+  assert.equal(result.status, "approved");
+  assert.equal(result.currentOwnerRole, "operations");
+  assert.ok(result.warranty.serviceOrder.code.startsWith("WAR-"));
+  assert.equal(result.warranty.serviceOrder.status, "created");
+  assert.equal(result.warranty.decisionNote, "Confirmed within the warranty period");
+  assert.equal(result.messages.length, 1);
+});
+
+test("support service rejects warranty order creation when the warranty period has expired", async (t) => {
+  const ticket = {
+    _id: "507f191e810c19729de86107",
+    userId: { _id: "customer-1" },
+    storeId: "507f191e810c19729de86102",
+    category: "warranty",
+    status: "under_review",
+    warranty: {
+      itemName: "Classic Lens",
+      warrantyMonths: 3,
+      expiresAt: new Date("2025-01-01T00:00:00.000Z"),
+      eligibility: "eligible",
+      serviceOrder: null,
+    },
+    messages: [],
+    routingHistory: [],
+    save: async () => ticket,
+  };
+  const restore = patchMethods([
+    {
+      target: SupportTicket,
+      key: "findById",
+      value: () => createTicketQuery(ticket),
+    },
+  ]);
+  t.after(restore);
+
+  await assert.rejects(
+    () =>
+      supportService.createWarrantyOrder(
+        "507f191e810c19729de86107",
+        {
+          id: "sales-1",
+          role: "sales",
+          storeAccess: { mode: "all" },
+        },
+      ),
+    (error) =>
+      error instanceof AppError &&
+      /still within the warranty period/i.test(error.message),
+  );
+});
+
+test("support service lets sales create a warranty refund when replacement stock is unavailable", async (t) => {
+  const ticket = {
+    _id: "507f191e810c19729de86110",
+    userId: { _id: "customer-1" },
+    orderId: "507f191e810c19729de86111",
+    storeId: "507f191e810c19729de86102",
+    category: "warranty",
+    status: "under_review",
+    warranty: {
+      orderItemId: "507f191e810c19729de86112",
+      itemName: "Titanium Lens",
+      warrantyMonths: 12,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      eligibility: "eligible",
+      serviceOrder: null,
+    },
+    messages: [],
+    routingHistory: [],
+    save: async () => ticket,
+  };
+  const order = {
+    _id: "507f191e810c19729de86111",
+    userId: "customer-1",
+    paidAmount: 240000,
+    paymentCode: "ORD-20260402-0001",
+    refund: { status: "none" },
+    items: [
+      {
+        _id: "507f191e810c19729de86112",
+        lineTotal: 180000,
+      },
+    ],
+  };
+  const capturedPayloads = [];
+  const restore = patchMethods([
+    {
+      target: SupportTicket,
+      key: "findById",
+      value: () => createTicketQuery(ticket),
+    },
+    {
+      target: Order,
+      key: "findById",
+      value: () => ({
+        select: async () => order,
+      }),
+    },
+    {
+      target: User,
+      key: "findById",
+      value: () => ({
+        select: async () => ({
+          refundAccount: {
+            bankCode: "VCB",
+            bankName: "Vietcombank",
+            accountNumber: "1234567890",
+            accountHolder: "Nguyen Van A",
+          },
+        }),
+      }),
+    },
+    {
+      target: orderService,
+      key: "createRefundRequest",
+      value: async (_orderId, _user, payload) => {
+        capturedPayloads.push(payload);
+        return {
+          _id: order._id,
+          refund: {
+            status: "requested",
+            requestedBreakdown: payload.requestedBreakdown,
+          },
+        };
+      },
+    },
+  ]);
+  t.after(restore);
+
+  const result = await supportService.createWarrantyRefund(
+    "507f191e810c19729de86110",
+    {
+      id: "sales-1",
+      role: "sales",
+      storeAccess: { mode: "all" },
+    },
+    {
+      note: "Lens model is out of stock, convert to refund",
+    },
+  );
+
+  assert.equal(capturedPayloads.length, 1);
+  assert.equal(capturedPayloads[0].requestedBreakdown.itemAmount, 180000);
+  assert.equal(capturedPayloads[0].requestedBreakdown.shippingFeeAmount, 0);
+  assert.equal(capturedPayloads[0].requestedBreakdown.returnShippingFeeAmount, 0);
+  assert.equal(result.status, "completed");
+  assert.equal(result.currentOwnerRole, "none");
+  assert.equal(result.warranty.decisionNote, "Lens model is out of stock, convert to refund");
+  assert.equal(result.warranty.completedBy, "sales-1");
+  assert.equal(result.messages.length, 1);
+  assert.match(result.messages[0].message, /created refund request/i);
+});
+
+test("support service syncs warranty order status when operations move the ticket to in_service", async (t) => {
+  const ticket = {
+    _id: "507f191e810c19729de86108",
+    userId: { _id: "customer-1" },
+    storeId: "507f191e810c19729de86102",
+    category: "warranty",
+    status: "approved",
+    warranty: {
+      itemName: "Titanium Frame",
+      warrantyMonths: 12,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      eligibility: "eligible",
+      serviceOrder: {
+        code: "WAR-20260402-000001",
+        status: "created",
+        createdBy: "sales-1",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    },
+    messages: [],
+    routingHistory: [],
+    save: async () => ticket,
+  };
+  const restore = patchMethods([
+    {
+      target: SupportTicket,
+      key: "findById",
+      value: () => createTicketQuery(ticket),
+    },
+  ]);
+  t.after(restore);
+
+  const result = await supportService.updateStatus(
+    "507f191e810c19729de86108",
+    {
+      id: "ops-1",
+      role: "operations",
+      storeAccess: { mode: "all" },
+    },
+    {
+      status: "in_service",
+      serviceNote: "Received the product for warranty service",
+    },
+  );
+
+  assert.equal(result.status, "in_service");
+  assert.equal(result.currentOwnerRole, "operations");
+  assert.equal(result.warranty.serviceOrder.status, "in_service");
+});
+
+test("support service blocks direct warranty approval before a warranty order exists", async (t) => {
+  const ticket = {
+    _id: "507f191e810c19729de86109",
+    userId: { _id: "customer-1" },
+    storeId: "507f191e810c19729de86102",
+    category: "warranty",
+    status: "under_review",
+    warranty: {
+      itemName: "Titanium Frame",
+      warrantyMonths: 12,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      eligibility: "eligible",
+      serviceOrder: null,
+    },
+    messages: [],
+    routingHistory: [],
+    save: async () => ticket,
+  };
+  const restore = patchMethods([
+    {
+      target: SupportTicket,
+      key: "findById",
+      value: () => createTicketQuery(ticket),
+    },
+  ]);
+  t.after(restore);
+
+  await assert.rejects(
+    () =>
+      supportService.updateStatus(
+        "507f191e810c19729de86109",
+        {
+          id: "sales-1",
+          role: "sales",
+          storeAccess: { mode: "all" },
+        },
+        {
+          status: "approved",
+          decisionNote: "Looks valid",
+        },
+      ),
+    (error) =>
+      error instanceof AppError &&
+      /use warranty-order creation/i.test(error.message),
+  );
 });
 
 test("support service assigns order-linked staff-created tickets to the customer owner", async (t) => {

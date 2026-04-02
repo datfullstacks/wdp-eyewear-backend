@@ -1,6 +1,23 @@
 const Product = require("../models/Product");
 const AppError = require("../errors/AppError");
-const { ORDER_STATUS, ORDER_TYPES } = require("../constants");
+const { ORDER_OPS_STAGE, ORDER_STATUS, ORDER_TYPES } = require("../constants");
+
+const PREORDER_COMMIT_OPS_STAGES = new Set([
+  ORDER_OPS_STAGE.READY_TO_PACK,
+  ORDER_OPS_STAGE.PACKING,
+  ORDER_OPS_STAGE.READY_TO_SHIP,
+  ORDER_OPS_STAGE.SHIPMENT_CREATED,
+  ORDER_OPS_STAGE.HANDOVER_TO_CARRIER,
+  ORDER_OPS_STAGE.IN_TRANSIT,
+  ORDER_OPS_STAGE.DELIVERY_FAILED,
+  ORDER_OPS_STAGE.WAITING_REDELIVERY,
+  ORDER_OPS_STAGE.RETURN_PENDING,
+  ORDER_OPS_STAGE.RETURN_IN_TRANSIT,
+  ORDER_OPS_STAGE.EXCEPTION_HOLD,
+  ORDER_OPS_STAGE.DELIVERED,
+  ORDER_OPS_STAGE.RETURNED,
+  ORDER_OPS_STAGE.CLOSED,
+]);
 
 function toTrimmedString(value, fallback = "") {
   if (value === undefined || value === null) return fallback;
@@ -29,17 +46,24 @@ function isTrackedInventoryProduct(product) {
 
 function shouldCommitInventory(order) {
   if (!order) return false;
-  if (normalizeOrderType(order.orderType) !== ORDER_TYPES.READY_STOCK) {
-    return false;
+  const normalizedOrderType = normalizeOrderType(order.orderType);
+  if (normalizedOrderType === ORDER_TYPES.READY_STOCK) {
+    return [
+      ORDER_STATUS.CONFIRMED,
+      ORDER_STATUS.PROCESSING,
+      ORDER_STATUS.SHIPPED,
+      ORDER_STATUS.DELIVERED,
+      ORDER_STATUS.RETURNED,
+    ].includes(normalizeOrderStatus(order.status));
   }
 
-  return [
-    ORDER_STATUS.CONFIRMED,
-    ORDER_STATUS.PROCESSING,
-    ORDER_STATUS.SHIPPED,
-    ORDER_STATUS.DELIVERED,
-    ORDER_STATUS.RETURNED,
-  ].includes(normalizeOrderStatus(order.status));
+  if (normalizedOrderType === ORDER_TYPES.PRE_ORDER) {
+    return PREORDER_COMMIT_OPS_STAGES.has(
+      toTrimmedString(order?.opsStage, "").toLowerCase(),
+    );
+  }
+
+  return false;
 }
 
 function hasCommittedInventory(order) {

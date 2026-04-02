@@ -9,6 +9,8 @@ const {
   createSupportTicketRules,
   replySupportTicketRules,
   updateSupportTicketStatusRules,
+  createWarrantyOrderRules,
+  createWarrantyRefundRules,
 } = require('../validators/supportValidator');
 
 /**
@@ -414,6 +416,24 @@ router.put(
   updateSupportTicketStatusRules,
   validate,
   supportController.updateTicketStatus
+);
+
+router.post(
+  '/:id/warranty-order',
+  authorize(...BUSINESS_STAFF_ROLES),
+  validateId,
+  createWarrantyOrderRules,
+  validate,
+  supportController.createWarrantyOrder
+);
+
+router.post(
+  '/:id/warranty-refund',
+  authorize(...BUSINESS_STAFF_ROLES),
+  validateId,
+  createWarrantyRefundRules,
+  validate,
+  supportController.createWarrantyRefund
 );
 
 module.exports = router;
