@@ -3010,6 +3010,7 @@ function isAllowedPrescriptionFrameCombo(items = []) {
 
   const lensItems = [];
   const frameItems = [];
+  const otherReadyStockItems = [];
 
   for (const item of normalizedItems) {
     const family = getItemWorkflowFamily(item);
@@ -3024,10 +3025,15 @@ function isAllowedPrescriptionFrameCombo(items = []) {
     }
 
     if (family === ORDER_TYPES.READY_STOCK) {
-      if (productType !== PRODUCT_TYPES.FRAME || Boolean(item?.preOrder)) {
+      if (Boolean(item?.preOrder)) {
         return false;
       }
-      frameItems.push(item);
+
+      if (productType === PRODUCT_TYPES.FRAME) {
+        frameItems.push(item);
+      } else {
+        otherReadyStockItems.push(item);
+      }
       continue;
     }
 
@@ -3036,10 +3042,14 @@ function isAllowedPrescriptionFrameCombo(items = []) {
 
   if (
     !lensItems.length ||
-    !frameItems.length ||
-    normalizedItems.length !== lensItems.length + frameItems.length
+    normalizedItems.length !==
+      lensItems.length + frameItems.length + otherReadyStockItems.length
   ) {
     return false;
+  }
+
+  if (!frameItems.length) {
+    return true;
   }
 
   if (lensItems.length === 1 && frameItems.length === 1) {
