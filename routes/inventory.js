@@ -2,7 +2,11 @@ const express = require('express');
 const inventoryController = require('../controllers/inventoryController');
 const { protect, authorize } = require('../middlewares/auth');
 const { validate, validateId } = require('../middlewares/validator');
-const { listReceiptRules, createReceiptRules } = require('../validators/inventoryValidator');
+const {
+  listReceiptRules,
+  createReceiptRules,
+  adjustStockRules,
+} = require('../validators/inventoryValidator');
 
 const router = express.Router();
 
@@ -263,6 +267,14 @@ router.post(
   createReceiptRules,
   validate,
   inventoryController.createReceipt
+);
+
+router.post(
+  '/adjustments',
+  authorize('manager', 'operations'),
+  adjustStockRules,
+  validate,
+  inventoryController.adjustStock
 );
 
 module.exports = router;

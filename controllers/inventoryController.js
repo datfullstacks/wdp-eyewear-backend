@@ -31,3 +31,8 @@ exports.createReceipt = asyncHandler(async (req, res) => {
   const receipt = await inventoryService.createStockReceipt(req.body, req.user);
   ApiResponse.created(res, receipt, 'Stock receipt created successfully');
 });
+
+exports.adjustStock = asyncHandler(async (req, res) => {
+  const result = await inventoryService.adjustVariantStock(req.body, req.user);
+  ApiResponse.success(res, result, 'Stock adjusted successfully');
+});

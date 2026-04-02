@@ -101,3 +101,21 @@ exports.updateTicketStatus = asyncHandler(async (req, res) => {
   const ticket = await supportService.updateStatus(req.params.id, req.user, req.body);
   ApiResponse.success(res, ticket, 'Support ticket status updated successfully');
 });
+
+exports.createWarrantyOrder = asyncHandler(async (req, res) => {
+  const ticket = await supportService.createWarrantyOrder(
+    req.params.id,
+    req.user,
+    req.body,
+  );
+  ApiResponse.success(res, ticket, 'Warranty order created successfully');
+});
+
+exports.createWarrantyRefund = asyncHandler(async (req, res) => {
+  const ticket = await supportService.createWarrantyRefund(
+    req.params.id,
+    req.user,
+    req.body,
+  );
+  ApiResponse.success(res, ticket, 'Warranty refund request created successfully');
+});

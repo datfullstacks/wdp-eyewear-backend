@@ -172,6 +172,57 @@ class InventoryService {
     ]);
   }
 
+  async adjustVariantStock(payload = {}, currentUser) {
+    if (!currentUser?.id) throw new AppError('Unauthorized', 401);
+
+    const productId = String(payload.productId || payload.product_id || '').trim();
+    const variantId = String(payload.variantId || payload.variant_id || '').trim();
+    if (!productId) throw new AppError('productId is required', 400);
+    if (!variantId) throw new AppError('variantId is required', 400);
+
+    const nextStock = Number(payload.stock);
+    if (!Number.isInteger(nextStock) || nextStock < 0) {
+      throw new AppError('stock must be an integer >= 0', 400);
+    }
+
+    const warehouseLocation = String(payload.warehouseLocation || '').trim();
+    const note = String(payload.note || '').trim();
+    const product = await Product.findById(productId).select(
+      '_id name inventory variants updatedAt',
+    );
+    if (!product) {
+      throw new AppError('Product not found', 404);
+    }
+
+    if (product.inventory?.track === false) {
+      throw new AppError('This product does not track inventory', 400);
+    }
+
+    const variants = Array.isArray(product.variants) ? product.variants : [];
+    const variant = variants.find((item) => String(item?._id) === variantId);
+    if (!variant) {
+      throw new AppError('Variant not found', 404);
+    }
+
+    variant.stock = nextStock;
+    if (warehouseLocation) {
+      variant.warehouseLocation = warehouseLocation;
+    }
+
+    await product.save();
+
+    return {
+      productId: String(product._id),
+      productName: product.name,
+      variantId: String(variant._id),
+      sku: String(variant.sku || ''),
+      stock: Number(variant.stock || 0),
+      warehouseLocation: String(variant.warehouseLocation || ''),
+      note,
+      updatedAt: product.updatedAt || new Date(),
+    };
+  }
+
   async listStockReceipts(options = {}, currentUser) {
     const page = Math.max(1, Number(options.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(options.limit) || 10));

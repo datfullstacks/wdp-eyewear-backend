@@ -244,3 +244,49 @@ exports.updateSupportTicketStatusRules = [
     .isLength({ max: 500 })
     .withMessage("note cannot exceed 500 characters"),
 ];
+
+exports.createWarrantyOrderRules = [
+  body("note")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("note cannot exceed 500 characters"),
+  body("decisionNote")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("decisionNote cannot exceed 500 characters"),
+  body("serviceNote")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("serviceNote cannot exceed 500 characters"),
+];
+
+exports.createWarrantyRefundRules = [
+  body("note")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("note cannot exceed 500 characters"),
+  body("decisionNote")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("decisionNote cannot exceed 500 characters"),
+  body("serviceNote")
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("serviceNote cannot exceed 500 characters"),
+  body(["bankAccount", "bank_account"]).optional().isObject(),
+  body(["bankAccount.bankCode", "bank_account.bankCode"]).optional().isString(),
+  body(["bankAccount.bankName", "bank_account.bankName"]).optional().isString(),
+  body(["bankAccount.accountNumber", "bank_account.accountNumber"]).optional().isString(),
+  body(["bankAccount.accountHolder", "bank_account.accountHolder"]).optional().isString(),
+  body(["bankAccount.note", "bank_account.note"])
+    .optional()
+    .isString()
+    .isLength({ max: 500 })
+    .withMessage("bankAccount.note cannot exceed 500 characters"),
+];

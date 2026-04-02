@@ -2998,6 +2998,7 @@ function isAllowedPrescriptionFrameCombo(items = []) {
 
   const lensItems = [];
   const frameItems = [];
+  const otherReadyStockItems = [];
 
   for (const item of normalizedItems) {
     const family = getItemWorkflowFamily(item);
@@ -3012,10 +3013,15 @@ function isAllowedPrescriptionFrameCombo(items = []) {
     }
 
     if (family === ORDER_TYPES.READY_STOCK) {
-      if (productType !== PRODUCT_TYPES.FRAME || Boolean(item?.preOrder)) {
+      if (Boolean(item?.preOrder)) {
         return false;
       }
-      frameItems.push(item);
+
+      if (productType === PRODUCT_TYPES.FRAME) {
+        frameItems.push(item);
+      } else {
+        otherReadyStockItems.push(item);
+      }
       continue;
     }
 
@@ -3024,10 +3030,14 @@ function isAllowedPrescriptionFrameCombo(items = []) {
 
   if (
     !lensItems.length ||
-    !frameItems.length ||
-    normalizedItems.length !== lensItems.length + frameItems.length
+    normalizedItems.length !==
+      lensItems.length + frameItems.length + otherReadyStockItems.length
   ) {
     return false;
+  }
+
+  if (!frameItems.length) {
+    return true;
   }
 
   if (lensItems.length === 1 && frameItems.length === 1) {
@@ -3281,7 +3291,11 @@ function normalizeRefundStatus(status) {
 }
 
 async function maybeRestoreReadyStockInventory(order, actorId = null) {
-  if (toTrimmedString(order?.orderType, "").toLowerCase() !== ORDER_TYPES.READY_STOCK) {
+  if (
+    ![ORDER_TYPES.READY_STOCK, ORDER_TYPES.PRE_ORDER].includes(
+      toTrimmedString(order?.orderType, "").toLowerCase(),
+    )
+  ) {
     return false;
   }
 
@@ -4428,12 +4442,16 @@ async function createRefundRequest(id, currentUser, payload = {}) {
       fieldName: "bankAccount",
     },
   );
-  const baseBreakdown = splitPaidAmountIntoRefundBreakdown(order, paidAmount, true);
+  const requestedBreakdown =
+    payload.requestedBreakdown !== undefined ||
+    payload.requested_breakdown !== undefined
+      ? resolveRequestedRefundBreakdown(order, payload, paidAmount)
+      : splitPaidAmountIntoRefundBreakdown(order, paidAmount, true);
 
   const previousRefundStatus = order.refund?.status || "none";
 
   order.refund = buildRefundRequestState(order, currentUser, payload, {
-    requestedBreakdown: baseBreakdown,
+    requestedBreakdown,
     bankAccount: requestedBankAccount,
     note: payload.note,
     requiresReturn: false,

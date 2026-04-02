@@ -5,6 +5,8 @@ const AppError = require("../errors/AppError");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
 const Store = require("../models/Store");
+const User = require("../models/User");
+const orderService = require("./orderService");
 const {
   SupportTicket,
   SUPPORT_TICKET_CATEGORIES,
@@ -42,6 +44,12 @@ const WARRANTY_ELIGIBILITY_SET = new Set([
 ]);
 const SUPPORT_PRIORITY_SET = new Set(["low", "normal", "high"]);
 const SUPPORT_ATTACHMENT_TYPE_SET = new Set(SUPPORT_ATTACHMENT_TYPES);
+const WARRANTY_ORDER_STATUS_SET = new Set([
+  "created",
+  "in_service",
+  "completed",
+  "cancelled",
+]);
 const AFTER_SALES_EVIDENCE_REQUIRED_CATEGORIES = new Set([
   "order",
   "refund",
@@ -62,7 +70,7 @@ const SUPPORT_ATTACHMENT_VIDEO_EXTENSIONS = new Set([
 ]);
 const MAX_SUPPORT_ATTACHMENTS = 6;
 const WARRANTY_TRANSITIONS = Object.freeze({
-  requested: ["under_review", "rejected"],
+  requested: ["under_review", "approved", "rejected"],
   under_review: ["approved", "rejected"],
   approved: ["in_service", "completed"],
   in_service: ["completed"],
@@ -115,6 +123,11 @@ function normalizeStatus(value) {
 function normalizeOwnerRole(value) {
   const normalized = toTrimmedString(value, "").toLowerCase();
   return SUPPORT_OWNER_ROLE_SET.has(normalized) ? normalized : "";
+}
+
+function normalizeWarrantyOrderStatus(value, fallback = "") {
+  const normalized = toTrimmedString(value, fallback).toLowerCase();
+  return WARRANTY_ORDER_STATUS_SET.has(normalized) ? normalized : fallback;
 }
 
 function isWarrantyCategory(category) {
@@ -482,6 +495,10 @@ function buildOwnerRoleFilter(ownerRole, category = "") {
 function decorateTicketWorkflow(ticket) {
   if (!ticket) return ticket;
 
+  if (isWarrantyCategory(ticket.category)) {
+    syncWarrantyServiceOrder(ticket);
+  }
+
   const currentOwnerRole = normalizeOwnerRole(ticket.currentOwnerRole);
   const nextActionCode = toTrimmedString(ticket.nextActionCode, "");
   if (currentOwnerRole && nextActionCode) {
@@ -517,6 +534,85 @@ function addMonths(date, months) {
   const next = new Date(date);
   next.setMonth(next.getMonth() + Number(months || 0));
   return next;
+}
+
+function resolveWarrantyEligibilitySnapshot(warranty = {}, referenceTime = new Date()) {
+  const warrantyMonths = Math.max(0, Number(warranty?.warrantyMonths || 0));
+  if (warrantyMonths <= 0) {
+    return "not_covered";
+  }
+
+  const expiresAt = warranty?.expiresAt ? new Date(warranty.expiresAt) : null;
+  if (!expiresAt || Number.isNaN(expiresAt.getTime())) {
+    return "not_covered";
+  }
+
+  return expiresAt >= referenceTime ? "eligible" : "expired";
+}
+
+function ensureWarrantyMetadata(ticket) {
+  if (!ticket.warranty || typeof ticket.warranty !== "object") {
+    ticket.warranty = {};
+  }
+  return ticket.warranty;
+}
+
+function mapWarrantyOrderStatusFromTicketStatus(ticketStatus, fallback = "created") {
+  const normalizedStatus = normalizeStatus(ticketStatus);
+  if (normalizedStatus === "approved") {
+    return "created";
+  }
+  if (normalizedStatus === "in_service") {
+    return "in_service";
+  }
+  if (normalizedStatus === "completed") {
+    return "completed";
+  }
+  if (normalizedStatus === "rejected") {
+    return "cancelled";
+  }
+
+  return normalizeWarrantyOrderStatus(fallback, "created");
+}
+
+function syncWarrantyServiceOrder(ticket, referenceTime = new Date()) {
+  const warranty = ensureWarrantyMetadata(ticket);
+  warranty.eligibility = resolveWarrantyEligibilitySnapshot(
+    warranty,
+    referenceTime,
+  );
+
+  if (!warranty.serviceOrder || typeof warranty.serviceOrder !== "object") {
+    return ticket;
+  }
+
+  warranty.serviceOrder.status = mapWarrantyOrderStatusFromTicketStatus(
+    ticket.status,
+    warranty.serviceOrder.status,
+  );
+  warranty.serviceOrder.updatedAt = referenceTime;
+
+  return ticket;
+}
+
+function buildWarrantyOrderCode(ticket) {
+  const now = new Date();
+  const ymd = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("");
+  const suffixSeed = toTrimmedString(
+    ticket?.orderId?.paymentCode || ticket?.orderId || ticket?._id,
+    "",
+  )
+    .replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
+  const suffix =
+    suffixSeed.slice(-6) ||
+    Math.random().toString(36).slice(2, 8).toUpperCase();
+
+  return `WAR-${ymd}-${suffix}`;
 }
 
 function resolveWarrantyReferenceDate(order) {
@@ -566,6 +662,53 @@ function buildWarrantySnapshot(order, orderItem, product) {
     approvedAt: null,
     completedBy: null,
     completedAt: null,
+    serviceOrder: null,
+  };
+}
+
+function hasRefundBankAccount(value) {
+  if (!value || typeof value !== "object") return false;
+  return Boolean(
+    toTrimmedString(value.bankCode, "") &&
+      toTrimmedString(value.bankName, "") &&
+      toTrimmedString(value.accountNumber, "") &&
+      toTrimmedString(value.accountHolder, ""),
+  );
+}
+
+function toPlainRefundBankAccount(value) {
+  if (!hasRefundBankAccount(value)) return null;
+  return {
+    bankCode: toTrimmedString(value.bankCode, ""),
+    bankName: toTrimmedString(value.bankName, ""),
+    accountNumber: toTrimmedString(value.accountNumber, ""),
+    accountHolder: toTrimmedString(value.accountHolder, ""),
+    note: toTrimmedString(value.note, ""),
+  };
+}
+
+function buildWarrantyRefundBreakdown(order, warranty = {}) {
+  const orderItemId = toTrimmedString(warranty?.orderItemId, "");
+  const orderItem = (Array.isArray(order?.items) ? order.items : []).find(
+    (item) => String(item?._id || "") === orderItemId,
+  );
+
+  if (!orderItem) {
+    throw new AppError("Warranty order item not found on the linked order", 404);
+  }
+
+  const lineTotal = Math.max(0, Number(orderItem?.lineTotal || 0));
+  const paidAmount = Math.max(0, Number(order?.paidAmount || 0));
+  const refundableItemAmount = Math.min(lineTotal, paidAmount);
+
+  if (refundableItemAmount <= 0) {
+    throw new AppError("This warranty item has no refundable paid amount", 400);
+  }
+
+  return {
+    itemAmount: refundableItemAmount,
+    shippingFeeAmount: 0,
+    returnShippingFeeAmount: 0,
   };
 }
 
@@ -1080,6 +1223,192 @@ class SupportService {
     return this.getTicketById(ticket._id, currentUser);
   }
 
+  async createWarrantyOrder(id, currentUser, payload = {}) {
+    if (!isStaff(currentUser) && !isManager(currentUser)) {
+      throw new AppError(
+        "Only sales/support can create warranty service orders",
+        403,
+      );
+    }
+
+    const ticket = await this.getTicketById(id, currentUser);
+    assertBusinessTicketAccess(ticket, currentUser);
+
+    if (!isWarrantyCategory(ticket.category)) {
+      throw new AppError("Warranty order can only be created for warranty tickets", 400);
+    }
+
+    const warranty = ensureWarrantyMetadata(ticket);
+    warranty.eligibility = resolveWarrantyEligibilitySnapshot(warranty);
+
+    if (warranty.eligibility !== "eligible") {
+      throw new AppError(
+        "Warranty order can only be created while the product is still within the warranty period",
+        400,
+      );
+    }
+
+    if (toTrimmedString(warranty.serviceOrder?.code, "")) {
+      throw new AppError("Warranty order already exists for this ticket", 409);
+    }
+
+    if (["rejected", "completed"].includes(normalizeStatus(ticket.status))) {
+      throw new AppError(
+        "Warranty order cannot be created for a rejected or completed ticket",
+        400,
+      );
+    }
+
+    const createdAt = new Date();
+    const note = toTrimmedString(
+      payload.note || payload.decisionNote || payload.serviceNote,
+      "",
+    );
+    const code = buildWarrantyOrderCode(ticket);
+
+    warranty.serviceOrder = {
+      code,
+      status: "created",
+      note,
+      createdBy: getUserId(currentUser),
+      createdAt,
+      updatedAt: createdAt,
+    };
+    warranty.approvedBy = warranty.approvedBy || getUserId(currentUser);
+    warranty.approvedAt = warranty.approvedAt || createdAt;
+    if (note) {
+      warranty.decisionNote = note;
+    }
+
+    ticket.status = "approved";
+    ticket.messages.push({
+      sender: "staff",
+      message: `Warranty confirmed. Created warranty order ${code}.`,
+      attachments: [],
+    });
+    ticket.lastMessageAt = createdAt;
+
+    applyTicketRoutingState(
+      ticket,
+      currentUser,
+      note || `Created warranty order ${code}`,
+    );
+    syncWarrantyServiceOrder(ticket, createdAt);
+
+    await ticket.save();
+    return this.getTicketById(ticket._id, currentUser);
+  }
+
+  async createWarrantyRefund(id, currentUser, payload = {}) {
+    if (!isStaff(currentUser)) {
+      throw new AppError(
+        "Only sales/support can create warranty refund requests",
+        403,
+      );
+    }
+
+    const ticket = await this.getTicketById(id, currentUser);
+    assertBusinessTicketAccess(ticket, currentUser);
+
+    if (!isWarrantyCategory(ticket.category)) {
+      throw new AppError("Warranty refund can only be created for warranty tickets", 400);
+    }
+
+    const warranty = ensureWarrantyMetadata(ticket);
+    warranty.eligibility = resolveWarrantyEligibilitySnapshot(warranty);
+
+    if (warranty.eligibility !== "eligible") {
+      throw new AppError(
+        "Warranty refund can only be created while the product is still within the warranty period",
+        400,
+      );
+    }
+
+    if (toTrimmedString(warranty.serviceOrder?.code, "")) {
+      throw new AppError(
+        "Warranty refund cannot be created after a warranty service order already exists",
+        409,
+      );
+    }
+
+    if (["rejected", "completed"].includes(normalizeStatus(ticket.status))) {
+      throw new AppError(
+        "Warranty refund cannot be created for a rejected or completed ticket",
+        400,
+      );
+    }
+
+    const orderId = toTrimmedString(ticket?.orderId?._id || ticket?.orderId, "");
+    if (!orderId || !mongoose.isValidObjectId(orderId)) {
+      throw new AppError("Warranty ticket is missing a linked order", 400);
+    }
+
+    const order = await Order.findById(orderId).select(
+      "_id userId paidAmount items refund paymentCode",
+    );
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+
+    const requestedBreakdown = buildWarrantyRefundBreakdown(order, warranty);
+    const note = toTrimmedString(
+      payload.note || payload.decisionNote || payload.serviceNote,
+      "",
+    );
+    const explicitBankAccount = toPlainRefundBankAccount(
+      payload.bankAccount || payload.bank_account,
+    );
+    const customer = explicitBankAccount
+      ? null
+      : await User.findById(order.userId).select("refundAccount");
+    const bankAccount =
+      explicitBankAccount ||
+      toPlainRefundBankAccount(customer?.refundAccount) ||
+      toPlainRefundBankAccount(order?.refund?.bankAccount);
+
+    if (!bankAccount) {
+      throw new AppError(
+        "Customer refund bank account is required before creating a warranty refund",
+        400,
+      );
+    }
+
+    const itemLabel = toTrimmedString(warranty.itemName, "this product");
+    await orderService.createRefundRequest(orderId, currentUser, {
+      reason: `Warranty refund for ${itemLabel} because replacement stock is unavailable`,
+      note:
+        note ||
+        `Created from warranty ticket because replacement stock is unavailable for ${itemLabel}.`,
+      responsibility: "system",
+      requestedBreakdown,
+      bankAccount,
+    });
+
+    const createdAt = new Date();
+    if (note) {
+      warranty.decisionNote = note;
+    }
+    warranty.completedBy = getUserId(currentUser);
+    warranty.completedAt = createdAt;
+    ticket.status = "completed";
+    ticket.messages.push({
+      sender: "staff",
+      message: `Warranty replacement unavailable. Created refund request for order ${order.paymentCode || order._id}.`,
+      attachments: [],
+    });
+    ticket.lastMessageAt = createdAt;
+
+    applyTicketRoutingState(
+      ticket,
+      currentUser,
+      note ||
+        `Created warranty refund request for order ${order.paymentCode || order._id}`,
+    );
+
+    await ticket.save();
+    return this.getTicketById(ticket._id, currentUser);
+  }
+
   async updateStatus(id, currentUser, payload = {}) {
     if (!isBusinessUser(currentUser)) {
       throw new AppError("Forbidden", 403);
@@ -1099,29 +1428,41 @@ class SupportService {
     if (isWarrantyCategory(ticket.category)) {
       validateWarrantyTransition(ticket.status, nextStatus, currentUser);
 
-      ticket.status = nextStatus;
-      if (!ticket.warranty) {
-        ticket.warranty = {};
+      const warranty = ensureWarrantyMetadata(ticket);
+      warranty.eligibility = resolveWarrantyEligibilitySnapshot(warranty);
+
+      if (
+        nextStatus === "approved" &&
+        !toTrimmedString(warranty.serviceOrder?.code, "")
+      ) {
+        throw new AppError(
+          "Use warranty-order creation after sales confirmation instead of approving the ticket directly",
+          400,
+        );
       }
+
+      ticket.status = nextStatus;
 
       const decisionNote = toTrimmedString(payload.decisionNote || payload.note, "");
       const serviceNote = toTrimmedString(payload.serviceNote, "");
 
       if (decisionNote) {
-        ticket.warranty.decisionNote = decisionNote;
+        warranty.decisionNote = decisionNote;
       }
       if (serviceNote) {
-        ticket.warranty.serviceNote = serviceNote;
+        warranty.serviceNote = serviceNote;
       }
 
       if (nextStatus === "approved") {
-        ticket.warranty.approvedBy = getUserId(currentUser);
-        ticket.warranty.approvedAt = new Date();
+        warranty.approvedBy = getUserId(currentUser);
+        warranty.approvedAt = new Date();
       }
       if (nextStatus === "completed") {
-        ticket.warranty.completedBy = getUserId(currentUser);
-        ticket.warranty.completedAt = new Date();
+        warranty.completedBy = getUserId(currentUser);
+        warranty.completedAt = new Date();
       }
+
+      syncWarrantyServiceOrder(ticket);
     } else {
       if (!GENERAL_STATUS_SET.has(nextStatus)) {
         throw new AppError("Invalid support ticket status", 400);
@@ -1152,8 +1493,11 @@ module.exports.__private = {
   normalizeSupportAttachments,
   requiresAfterSalesEvidence,
   resolveWarrantyReferenceDate,
+  resolveWarrantyEligibilitySnapshot,
   addMonths,
   buildWarrantySnapshot,
+  buildWarrantyOrderCode,
+  syncWarrantyServiceOrder,
   validateWarrantyTransition,
   buildBusinessTicketVisibilityQuery,
   resolveRequestedStoreId,

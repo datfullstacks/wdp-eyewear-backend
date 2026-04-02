@@ -23,3 +23,23 @@ exports.createReceiptRules = [
   body('items.*.unitCost').optional().isFloat({ min: 0 }).withMessage('items.*.unitCost must be >= 0'),
   body('items.*.note').optional().isString()
 ];
+
+exports.adjustStockRules = [
+  body('productId')
+    .notEmpty()
+    .withMessage('productId is required')
+    .isMongoId()
+    .withMessage('productId must be a valid Mongo ID'),
+  body('variantId')
+    .notEmpty()
+    .withMessage('variantId is required')
+    .isMongoId()
+    .withMessage('variantId must be a valid Mongo ID'),
+  body('stock')
+    .notEmpty()
+    .withMessage('stock is required')
+    .isInt({ min: 0 })
+    .withMessage('stock must be an integer >= 0'),
+  body('warehouseLocation').optional().isString(),
+  body('note').optional().isString().isLength({ max: 500 }).withMessage('note cannot exceed 500 characters'),
+];
