@@ -32,6 +32,17 @@ const router = express.Router();
  *         description: Revenue summary returned successfully
  *       403:
  *         description: Only manager can access revenue analytics
+ * /api/analytics/manager/products:
+ *   get:
+ *     summary: Get manager product and order cadence analytics
+ *     tags: [Analytics]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Product analytics returned successfully
+ *       403:
+ *         description: Only manager can access product analytics
  * /api/analytics/admin/refunds/overview:
  *   get:
  *     summary: Legacy refund analytics path retained for compatibility, manager-only
@@ -83,6 +94,11 @@ router.get(
   "/manager/revenue",
   authorize(...BUSINESS_MANAGER_ROLES),
   analyticsController.getRevenueSummary,
+);
+router.get(
+  "/manager/products",
+  authorize(...BUSINESS_MANAGER_ROLES),
+  analyticsController.getManagerProductAnalytics,
 );
 router.get(
   "/admin/refunds/overview",

@@ -56,6 +56,9 @@ function mockAggregateSequence(results, capturedPipelines) {
 
     return {
       allowDiskUse: async () => result,
+      then(resolve, reject) {
+        return Promise.resolve(result).then(resolve, reject);
+      },
     };
   };
 }
@@ -143,6 +146,29 @@ test("audit pipeline unwinds refund history and applies DB-level audit filters",
         stage.$match &&
         stage.$match.$and &&
         stage.$match.$and.some((entry) => entry.actorRole === "admin"),
+    ),
+  );
+});
+
+test("top product pipeline unwinds items and looks up product metadata", () => {
+  const pipeline = analyticsPrivate.buildTopProductPerformancePipeline(
+    {
+      start: new Date("2026-01-01T00:00:00.000Z"),
+      end: new Date("2027-01-01T00:00:00.000Z"),
+    },
+    5,
+  );
+
+  assert.equal(pipeline[0].$match.status.$ne, "cancelled");
+  assert.equal(pipeline[1].$unwind, "$items");
+  assert.ok(
+    pipeline.some(
+      (stage) => stage.$lookup && stage.$lookup.from === "products",
+    ),
+  );
+  assert.ok(
+    pipeline.some(
+      (stage) => stage.$limit === 5,
     ),
   );
 });
@@ -358,6 +384,93 @@ test("getRefundAuditTrail returns aggregated audit buckets and pagination", asyn
     assert.equal(result.body.data.byAction[0].action, "complete");
     assert.equal(result.body.data.pagination.total, 2);
     assert.equal(result.body.data.rows[0].orderCode, "ORD-03");
+  } finally {
+    Order.aggregate = originalAggregate;
+  }
+});
+
+test("getManagerProductAnalytics returns order cadence summary and top products", async () => {
+  const originalAggregate = Order.aggregate;
+  const pipelines = [];
+  Order.aggregate = mockAggregateSequence(
+    [
+      [{ _id: null, orders: 2, units: 3, revenue: 120000 }],
+      [{ _id: null, orders: 10, units: 14, revenue: 650000 }],
+      [{ _id: null, orders: 24, units: 31, revenue: 1540000 }],
+      [{ _id: null, orders: 80, units: 112, revenue: 5200000 }],
+      [
+        {
+          _id: { year: 2026, month: 4, day: 2 },
+          orders: 2,
+          units: 3,
+          revenue: 120000,
+        },
+      ],
+      [
+        {
+          _id: { year: 2026, month: 4 },
+          orders: 10,
+          units: 14,
+          revenue: 650000,
+        },
+      ],
+      [
+        {
+          _id: { year: 2026, quarter: 2 },
+          orders: 24,
+          units: 31,
+          revenue: 1540000,
+        },
+      ],
+      [
+        {
+          _id: { year: 2026 },
+          orders: 80,
+          units: 112,
+          revenue: 5200000,
+        },
+      ],
+      [
+        {
+          productId: "661111111111111111111111",
+          name: "Classic Frame",
+          brand: "Eyes Dream",
+          type: "eyeglasses",
+          orders: 18,
+          unitsSold: 24,
+          revenue: 1840000,
+          lastOrderedAt: new Date("2026-04-02T08:00:00.000Z"),
+        },
+      ],
+    ],
+    pipelines,
+  );
+
+  try {
+    const { response, done, reject } = createResponseHarness();
+    analyticsController.getManagerProductAnalytics(
+      { query: {} },
+      response,
+      reject,
+    );
+
+    const result = await done;
+
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body.success, true);
+    assert.equal(result.body.data.summary.ordersToday, 2);
+    assert.equal(result.body.data.summary.ordersThisQuarter, 24);
+    assert.equal(result.body.data.timelines.daily.at(-1).orders, 2);
+    assert.equal(result.body.data.timelines.monthly.at(-1).units, 14);
+    assert.equal(result.body.data.timelines.quarterly.at(-1).orders, 24);
+    assert.equal(result.body.data.timelines.yearly.at(-1).orders, 80);
+    assert.equal(result.body.data.topProducts[0].name, "Classic Frame");
+    assert.equal(result.body.data.topProducts[0].unitsSold, 24);
+    assert.ok(
+      pipelines[8].some(
+        (stage) => stage.$lookup && stage.$lookup.from === "products",
+      ),
+    );
   } finally {
     Order.aggregate = originalAggregate;
   }

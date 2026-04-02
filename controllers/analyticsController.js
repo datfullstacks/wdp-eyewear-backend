@@ -47,6 +47,25 @@ function getPreviousMonthRange(date = new Date()) {
   return { start, end };
 }
 
+function getDayRange(date = new Date()) {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+  return { start, end };
+}
+
+function getQuarterRange(date = new Date()) {
+  const quarterStartMonth = Math.floor(date.getMonth() / 3) * 3;
+  const start = new Date(date.getFullYear(), quarterStartMonth, 1);
+  const end = new Date(date.getFullYear(), quarterStartMonth + 3, 1);
+  return { start, end };
+}
+
+function getYearRange(date = new Date()) {
+  const start = new Date(date.getFullYear(), 0, 1);
+  const end = new Date(date.getFullYear() + 1, 0, 1);
+  return { start, end };
+}
+
 function formatCurrencyNumber(value) {
   return Math.round(Number(value || 0));
 }
@@ -1008,6 +1027,327 @@ function buildRefundReconciliationCsv(rows) {
   return `\uFEFF${header.join(",")}\n${lines.join("\n")}`;
 }
 
+function buildItemsQuantityExpr(itemsPath = "$items") {
+  return {
+    $sum: {
+      $map: {
+        input: { $ifNull: [itemsPath, []] },
+        as: "item",
+        in: { $ifNull: ["$$item.quantity", 0] },
+      },
+    },
+  };
+}
+
+function buildCompletedOrderMatch(range) {
+  const match = {
+    status: { $ne: "cancelled" },
+  };
+
+  if (range?.start || range?.end) {
+    match.createdAt = {};
+    if (range.start) match.createdAt.$gte = range.start;
+    if (range.end) match.createdAt.$lt = range.end;
+  }
+
+  return match;
+}
+
+function shiftDays(date, offset) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + offset);
+}
+
+function shiftMonths(date, offset) {
+  return new Date(date.getFullYear(), date.getMonth() + offset, 1);
+}
+
+function shiftQuarters(date, offset) {
+  return shiftMonths(date, offset * 3);
+}
+
+function shiftYears(date, offset) {
+  return new Date(date.getFullYear() + offset, 0, 1);
+}
+
+function formatDayKey(date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function formatDayLabel(date) {
+  return [
+    String(date.getDate()).padStart(2, "0"),
+    String(date.getMonth() + 1).padStart(2, "0"),
+  ].join("/");
+}
+
+function formatMonthKey(date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+  ].join("-");
+}
+
+function formatMonthLabel(date) {
+  return [
+    String(date.getMonth() + 1).padStart(2, "0"),
+    date.getFullYear(),
+  ].join("/");
+}
+
+function formatQuarterKey(date) {
+  const quarter = Math.floor(date.getMonth() / 3) + 1;
+  return `${date.getFullYear()}-Q${quarter}`;
+}
+
+function formatQuarterLabel(date) {
+  const quarter = Math.floor(date.getMonth() / 3) + 1;
+  return `Q${quarter}/${date.getFullYear()}`;
+}
+
+function formatYearKey(date) {
+  return String(date.getFullYear());
+}
+
+function buildDayBuckets(date = new Date(), count = 14) {
+  const lastDay = getDayRange(date).start;
+  const firstDay = shiftDays(lastDay, -(count - 1));
+
+  return Array.from({ length: count }, (_, index) => {
+    const start = shiftDays(firstDay, index);
+    const end = shiftDays(start, 1);
+    return {
+      key: formatDayKey(start),
+      label: formatDayLabel(start),
+      start,
+      end,
+    };
+  });
+}
+
+function buildMonthBuckets(date = new Date(), count = 12) {
+  const lastMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+  const firstMonth = shiftMonths(lastMonth, -(count - 1));
+
+  return Array.from({ length: count }, (_, index) => {
+    const start = shiftMonths(firstMonth, index);
+    const end = shiftMonths(start, 1);
+    return {
+      key: formatMonthKey(start),
+      label: formatMonthLabel(start),
+      start,
+      end,
+    };
+  });
+}
+
+function buildQuarterBuckets(date = new Date(), count = 8) {
+  const lastQuarter = getQuarterRange(date).start;
+  const firstQuarter = shiftQuarters(lastQuarter, -(count - 1));
+
+  return Array.from({ length: count }, (_, index) => {
+    const start = shiftQuarters(firstQuarter, index);
+    const end = shiftQuarters(start, 1);
+    return {
+      key: formatQuarterKey(start),
+      label: formatQuarterLabel(start),
+      start,
+      end,
+    };
+  });
+}
+
+function buildYearBuckets(date = new Date(), count = 5) {
+  const lastYear = getYearRange(date).start;
+  const firstYear = shiftYears(lastYear, -(count - 1));
+
+  return Array.from({ length: count }, (_, index) => {
+    const start = shiftYears(firstYear, index);
+    const end = shiftYears(start, 1);
+    return {
+      key: formatYearKey(start),
+      label: formatYearKey(start),
+      start,
+      end,
+    };
+  });
+}
+
+function getBucketWindow(buckets = []) {
+  if (!Array.isArray(buckets) || buckets.length === 0) {
+    return null;
+  }
+
+  return {
+    start: buckets[0].start,
+    end: buckets[buckets.length - 1].end,
+  };
+}
+
+function toDailyTimelineKey(groupId = {}) {
+  return [
+    Number(groupId.year || 0),
+    String(groupId.month || 0).padStart(2, "0"),
+    String(groupId.day || 0).padStart(2, "0"),
+  ].join("-");
+}
+
+function toMonthlyTimelineKey(groupId = {}) {
+  return [
+    Number(groupId.year || 0),
+    String(groupId.month || 0).padStart(2, "0"),
+  ].join("-");
+}
+
+function toQuarterTimelineKey(groupId = {}) {
+  return `${Number(groupId.year || 0)}-Q${Number(groupId.quarter || 0)}`;
+}
+
+function toYearTimelineKey(groupId = {}) {
+  return String(Number(groupId.year || 0));
+}
+
+function mapTimelineBuckets(buckets, rows, resolveKey) {
+  const rowMap = new Map(
+    (Array.isArray(rows) ? rows : []).map((row) => [
+      resolveKey(row?._id || {}),
+      {
+        orders: Number(row?.orders || 0),
+        units: Number(row?.units || 0),
+        revenue: formatCurrencyNumber(row?.revenue || 0),
+      },
+    ]),
+  );
+
+  return (Array.isArray(buckets) ? buckets : []).map((bucket) => {
+    const metrics = rowMap.get(bucket.key) || {
+      orders: 0,
+      units: 0,
+      revenue: 0,
+    };
+
+    return {
+      label: bucket.label,
+      orders: metrics.orders,
+      units: metrics.units,
+      revenue: metrics.revenue,
+    };
+  });
+}
+
+async function aggregateOrderVolume(match) {
+  const [result] = await Order.aggregate([
+    { $match: match },
+    {
+      $project: {
+        total: { $ifNull: ["$total", 0] },
+        units: buildItemsQuantityExpr(),
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        orders: { $sum: 1 },
+        units: { $sum: "$units" },
+        revenue: { $sum: "$total" },
+      },
+    },
+  ]);
+
+  return {
+    orders: Number(result?.orders || 0),
+    units: Number(result?.units || 0),
+    revenue: formatCurrencyNumber(result?.revenue || 0),
+  };
+}
+
+async function aggregateOrderTimeline(match, groupId, sort) {
+  const rows = await Order.aggregate([
+    { $match: match },
+    {
+      $project: {
+        createdAt: 1,
+        total: { $ifNull: ["$total", 0] },
+        units: buildItemsQuantityExpr(),
+      },
+    },
+    {
+      $group: {
+        _id: groupId,
+        orders: { $sum: 1 },
+        units: { $sum: "$units" },
+        revenue: { $sum: "$total" },
+      },
+    },
+    { $sort: sort },
+  ]);
+
+  return Array.isArray(rows) ? rows : [];
+}
+
+function buildTopProductPerformancePipeline(range, limit = 8) {
+  return [
+    { $match: buildCompletedOrderMatch(range) },
+    { $unwind: "$items" },
+    {
+      $group: {
+        _id: {
+          productId: "$items.productId",
+          orderId: "$_id",
+        },
+        name: { $first: "$items.name" },
+        type: { $first: "$items.type" },
+        unitsSold: { $sum: { $ifNull: ["$items.quantity", 0] } },
+        revenue: { $sum: { $ifNull: ["$items.lineTotal", 0] } },
+        lastOrderedAt: { $max: "$createdAt" },
+      },
+    },
+    {
+      $group: {
+        _id: "$_id.productId",
+        name: { $first: "$name" },
+        type: { $first: "$type" },
+        orders: { $sum: 1 },
+        unitsSold: { $sum: "$unitsSold" },
+        revenue: { $sum: "$revenue" },
+        lastOrderedAt: { $max: "$lastOrderedAt" },
+      },
+    },
+    { $sort: { unitsSold: -1, revenue: -1, lastOrderedAt: -1 } },
+    { $limit: limit },
+    {
+      $lookup: {
+        from: "products",
+        localField: "_id",
+        foreignField: "_id",
+        as: "productLookup",
+      },
+    },
+    {
+      $unwind: {
+        path: "$productLookup",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        productId: { $toString: "$_id" },
+        name: { $ifNull: ["$productLookup.name", "$name"] },
+        brand: { $ifNull: ["$productLookup.brand", ""] },
+        type: { $ifNull: ["$productLookup.type", "$type"] },
+        orders: { $ifNull: ["$orders", 0] },
+        unitsSold: { $ifNull: ["$unitsSold", 0] },
+        revenue: { $round: [{ $ifNull: ["$revenue", 0] }, 0] },
+        lastOrderedAt: 1,
+      },
+    },
+  ];
+}
+
 async function aggregateRevenue(match) {
   const [result] = await Order.aggregate([
     { $match: match },
@@ -1506,6 +1846,103 @@ exports.getRevenueSummary = asyncHandler(async (req, res) => {
   );
 });
 
+exports.getManagerProductAnalytics = asyncHandler(async (req, res) => {
+  const now = new Date();
+  const todayRange = getDayRange(now);
+  const monthRange = getMonthRange(now);
+  const quarterRange = getQuarterRange(now);
+  const yearRange = getYearRange(now);
+
+  const dayBuckets = buildDayBuckets(now, 14);
+  const monthBuckets = buildMonthBuckets(now, 12);
+  const quarterBuckets = buildQuarterBuckets(now, 8);
+  const yearBuckets = buildYearBuckets(now, 5);
+
+  const [today, month, quarter, year, dailyRows, monthlyRows, quarterlyRows, yearlyRows, topProducts] =
+    await Promise.all([
+      aggregateOrderVolume(buildCompletedOrderMatch(todayRange)),
+      aggregateOrderVolume(buildCompletedOrderMatch(monthRange)),
+      aggregateOrderVolume(buildCompletedOrderMatch(quarterRange)),
+      aggregateOrderVolume(buildCompletedOrderMatch(yearRange)),
+      aggregateOrderTimeline(
+        buildCompletedOrderMatch(getBucketWindow(dayBuckets)),
+        {
+          year: { $year: "$createdAt" },
+          month: { $month: "$createdAt" },
+          day: { $dayOfMonth: "$createdAt" },
+        },
+        { "_id.year": 1, "_id.month": 1, "_id.day": 1 },
+      ),
+      aggregateOrderTimeline(
+        buildCompletedOrderMatch(getBucketWindow(monthBuckets)),
+        {
+          year: { $year: "$createdAt" },
+          month: { $month: "$createdAt" },
+        },
+        { "_id.year": 1, "_id.month": 1 },
+      ),
+      aggregateOrderTimeline(
+        buildCompletedOrderMatch(getBucketWindow(quarterBuckets)),
+        {
+          year: { $year: "$createdAt" },
+          quarter: {
+            $ceil: {
+              $divide: [{ $month: "$createdAt" }, 3],
+            },
+          },
+        },
+        { "_id.year": 1, "_id.quarter": 1 },
+      ),
+      aggregateOrderTimeline(
+        buildCompletedOrderMatch(getBucketWindow(yearBuckets)),
+        {
+          year: { $year: "$createdAt" },
+        },
+        { "_id.year": 1 },
+      ),
+      Order.aggregate(buildTopProductPerformancePipeline(yearRange, 8)),
+    ]);
+
+  ApiResponse.success(
+    res,
+    {
+      summary: {
+        ordersToday: today.orders,
+        unitsToday: today.units,
+        ordersThisMonth: month.orders,
+        unitsThisMonth: month.units,
+        ordersThisQuarter: quarter.orders,
+        unitsThisQuarter: quarter.units,
+        ordersThisYear: year.orders,
+        unitsThisYear: year.units,
+      },
+      timelines: {
+        daily: mapTimelineBuckets(dayBuckets, dailyRows, toDailyTimelineKey),
+        monthly: mapTimelineBuckets(monthBuckets, monthlyRows, toMonthlyTimelineKey),
+        quarterly: mapTimelineBuckets(
+          quarterBuckets,
+          quarterlyRows,
+          toQuarterTimelineKey,
+        ),
+        yearly: mapTimelineBuckets(yearBuckets, yearlyRows, toYearTimelineKey),
+      },
+      topProducts: (Array.isArray(topProducts) ? topProducts : []).map((row) => ({
+        productId: String(row?.productId || ""),
+        name: String(row?.name || "Product"),
+        brand: String(row?.brand || ""),
+        type: String(row?.type || ""),
+        orders: Number(row?.orders || 0),
+        unitsSold: Number(row?.unitsSold || 0),
+        revenue: formatCurrencyNumber(row?.revenue || 0),
+        lastOrderedAt: row?.lastOrderedAt
+          ? new Date(row.lastOrderedAt).toISOString()
+          : null,
+      })),
+    },
+    "Manager product analytics retrieved successfully",
+  );
+});
+
 module.exports.__private = {
   getRefundAnalyticsFilters,
   buildBaseRefundQuery,
@@ -1517,4 +1954,11 @@ module.exports.__private = {
   buildRefundCaseSnapshot,
   buildRefundReconciliationRow,
   buildRefundAuditRows,
+  buildCompletedOrderMatch,
+  buildDayBuckets,
+  buildMonthBuckets,
+  buildQuarterBuckets,
+  buildYearBuckets,
+  buildTopProductPerformancePipeline,
+  mapTimelineBuckets,
 };
