@@ -87,6 +87,7 @@ const buildOrderPayment = (order) => {
     paymentCode,
     content: paymentCode,
     createdAt: order?.createdAt || null,
+    expiresAt: order?.paymentExpiresAt || null,
     paidAt: order?.paidAt || null,
   };
 
